@@ -111,7 +111,7 @@ def _key_listener():
     fd = sys.stdin.fileno()
     try:
         _original_term_settings = termios.tcgetattr(fd)
-        tty.setraw(fd)
+        tty.setcbreak(fd)
         while True:
             ch = os.read(fd, 1)
             if ch:
