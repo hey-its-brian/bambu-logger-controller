@@ -3,6 +3,7 @@
 
 import json
 import os
+import select
 import signal
 import ssl
 import sys
@@ -25,30 +26,50 @@ BLUE = "\033[94m"
 CYAN = "\033[96m"
 DIM = "\033[2m"
 
-# --- HMS error code lookup (common P1S codes) ---
+# --- Error code lookups ---
+# HMS errors: keyed by full 16-char code (XXXX_XXXX_XXXX_XXXX)
+# Falls back to partial match on first 8 chars (XXXX_XXXX)
 HMS_ERRORS = {
+    # Heatbed
     "0300_0100": "Heatbed temperature error: heating failed",
     "0300_0200": "Heatbed temperature error: thermal runaway",
     "0300_0300": "Heatbed temperature error: sensor abnormal",
+    "0300_0400": "Chamber heater error",
+    # Nozzle
     "0500_0100": "Nozzle temperature error: heating failed",
     "0500_0200": "Nozzle temperature error: thermal runaway",
     "0500_0300": "Nozzle temperature error: sensor abnormal",
+    "0500_0400": "Nozzle clog detected",
+    "0500_0500": "Filament broken or runout",
+    # Motors
     "0700_0100": "Motor-X error: driver abnormal",
     "0700_0200": "Motor-Y error: driver abnormal",
     "0700_0300": "Motor-Z error: driver abnormal",
-    "0C00_0100": "First layer inspection failed",
-    "0C00_0200": "Spaghetti/noodle detected",
-    "0300_0400": "Chamber heater error",
-    "0500_0400": "Nozzle clog detected",
-    "0500_0500": "Filament broken or runout",
     "0700_0500": "Homing failed: axis stuck",
     "0700_0600": "Motor-E error: filament may be tangled",
+    # Heatbed homing
+    "0300_0D00_0002_0001": "Heatbed homing abnormal: bulge on heatbed or dirty nozzle tip",
+    "0300_0D00_0001_0003": "Build plate may not be properly placed",
+    # First layer / detection
+    "0C00_0100": "First layer inspection failed",
+    "0C00_0200": "Spaghetti/noodle detected",
+    "0C00_0300": "First layer inspection: AMS filament stuck or broken",
+    # AMS
     "1200_0100": "AMS communication error",
     "1200_0200": "AMS filament runout",
     "1200_0300": "AMS filament stuck or broken",
     "1200_0400": "AMS slot empty",
     "1200_1000": "AMS slot read error (RFID)",
 }
+
+# print_error: keyed by 8-char hex (from decimal print_error field)
+PRINT_ERRORS = {
+    "0300840C": "Print canceled by user",
+    "03008400": "Print error (generic)",
+}
+
+# Wiki URL for looking up unknown HMS codes
+HMS_WIKI_URL = "https://wiki.bambulab.com/en/x1/troubleshooting/hmscode"
 
 # --- Printer state names ---
 GCODE_STATES = {
@@ -61,6 +82,54 @@ GCODE_STATES = {
     "SLICING": "Slicing",
     "UNKNOWN": "Unknown",
 }
+
+
+# --- Error tracking ---
+_first_message_seen = False
+_startup_error_codes = set()  # codes present on first message (shown dimmed)
+_error_log = []  # list of (timestamp, severity, description, code_str) — append-only
+
+
+def _hms_code_full(attr, code):
+    """Build the full 16-char HMS code string from attr and code integers."""
+    return (
+        f"{(attr >> 16) & 0xFFFF:04X}_{attr & 0xFFFF:04X}_"
+        f"{(code >> 16) & 0xFFFF:04X}_{code & 0xFFFF:04X}"
+    )
+
+
+def _hms_code_short(attr, code):
+    """Build the short 8-char HMS code string (first two segments)."""
+    return f"{(attr >> 16) & 0xFFFF:04X}_{attr & 0xFFFF:04X}"
+
+
+def _lookup_hms(attr, code):
+    """Look up an HMS error description. Returns (description, code_str)."""
+    full = _hms_code_full(attr, code)
+    short = _hms_code_short(attr, code)
+    desc = HMS_ERRORS.get(full) or HMS_ERRORS.get(short)
+    if not desc:
+        desc = f"Unknown error — see {HMS_WIKI_URL}/{full}"
+    return desc, full
+
+
+def _lookup_print_error(error_val):
+    """Decode a decimal print_error value. Returns (description, hex_code) or None."""
+    if not error_val:
+        return None
+    hex_code = f"{int(error_val):08X}"
+    if hex_code == "00000000":
+        return None
+    desc = PRINT_ERRORS.get(hex_code, f"Print error ({hex_code}) — see {HMS_WIKI_URL}")
+    return desc, hex_code
+
+
+def _fan_pct(speed_val):
+    """Convert fan speed (0-15 string or int) to a percentage string."""
+    if speed_val is None:
+        return "--"
+    pct = round(int(speed_val) / 15 * 100)
+    return f"{pct}%"
 
 
 # --- Persistent message buffer ---
@@ -112,6 +181,9 @@ def _key_listener():
     try:
         _original_term_settings = termios.tcgetattr(fd)
         tty.setcbreak(fd)
+        # Drain any buffered input (e.g. Enter from launching the command)
+        while select.select([fd], [], [], 0)[0]:
+            os.read(fd, 1024)
         while True:
             ch = os.read(fd, 1)
             if ch:
@@ -136,7 +208,7 @@ def _restore_terminal():
 
 
 def clear_screen():
-    print("\033[2J\033[H", end="")
+    print("\033[2J\033[3J\033[H", end="")
 
 
 def format_time(minutes):
@@ -154,9 +226,63 @@ def format_temp(actual, target):
     return f"{a}/{t}°C"
 
 
-def print_status(data):
-    """Parse and display a print status message."""
+# --- Persistent printer state (accumulates across MQTT messages) ---
+_printer_state = {}
+
+
+def _update_state(data):
+    """Merge incoming data into persistent state."""
+    updated = False
+    for key in ("print", "system", "pushing"):
+        section = data.get(key, {})
+        if section and isinstance(section, dict):
+            _printer_state.update(section)
+            updated = True
+    return updated
+
+
+def _track_errors(data):
+    """Extract errors from raw MQTT data BEFORE it gets merged into state.
+
+    On the first message, just record which codes exist (startup errors).
+    On subsequent messages, append any new errors to the persistent log.
+    """
+    global _first_message_seen
+
     p = data.get("print", {})
+    if not p:
+        return
+
+    # Collect error codes from this message
+    current = {}
+    for entry in p.get("hms", []):
+        attr = entry.get("attr", 0)
+        code = entry.get("code", 0)
+        full_code = _hms_code_full(attr, code)
+        desc, code_str = _lookup_hms(attr, code)
+        severity = (code >> 16) & 0xFFFF
+        current[full_code] = (severity, desc, code_str)
+
+    pe_info = _lookup_print_error(p.get("print_error"))
+    if pe_info:
+        current[pe_info[1]] = (3, pe_info[0], pe_info[1])
+
+    if not _first_message_seen:
+        _first_message_seen = True
+        _startup_error_codes.update(current.keys())
+        return
+
+    # Append new errors to the log (skip startup codes and duplicates)
+    logged_codes = {entry[3] for entry in _error_log}
+    stamp = time.strftime("%H:%M:%S")
+    for code, (severity, desc, code_str) in current.items():
+        if code not in _startup_error_codes and code not in logged_codes:
+            _error_log.append((stamp, severity, desc, code_str))
+
+
+def print_status():
+    """Render the current printer state to screen."""
+    p = _printer_state
     if not p:
         return
 
@@ -183,31 +309,31 @@ def print_status(data):
     # State
     print(f"\n  {BOLD}State:{RESET}  {state_str}")
 
-    # Print job info
-    filename = p.get("gcode_file", "") or p.get("subtask_name", "")
-    if filename:
-        # Trim long filenames
-        if len(filename) > 35:
-            filename = "..." + filename[-32:]
-        print(f"  {BOLD}File:{RESET}   {filename}")
+    # Print job info (only when not idle)
+    if state not in ("IDLE", ""):
+        filename = p.get("gcode_file", "") or p.get("subtask_name", "")
+        if filename:
+            if len(filename) > 35:
+                filename = "..." + filename[-32:]
+            print(f"  {BOLD}File:{RESET}   {filename}")
 
-    progress = p.get("mc_percent")
-    if progress is not None:
-        bar_width = 30
-        filled = int(bar_width * int(progress) / 100)
-        bar = f"[{'█' * filled}{'░' * (bar_width - filled)}]"
-        print(f"  {BOLD}Progress:{RESET} {bar} {progress}%")
+        progress = p.get("mc_percent")
+        if progress is not None:
+            bar_width = 30
+            filled = int(bar_width * int(progress) / 100)
+            bar = f"[{'█' * filled}{'░' * (bar_width - filled)}]"
+            print(f"  {BOLD}Progress:{RESET} {bar} {progress}%")
 
-    layer = p.get("layer_num")
-    total_layers = p.get("total_layer_num")
-    if layer is not None and total_layers:
-        print(f"  {BOLD}Layer:{RESET}   {layer}/{total_layers}")
+        layer = p.get("layer_num")
+        total_layers = p.get("total_layer_num")
+        if layer is not None and total_layers:
+            print(f"  {BOLD}Layer:{RESET}   {layer}/{total_layers}")
 
-    remaining = p.get("mc_remaining_time")
-    if remaining is not None:
-        print(f"  {BOLD}ETA:{RESET}     {format_time(remaining)}")
+        remaining = p.get("mc_remaining_time")
+        if remaining is not None:
+            print(f"  {BOLD}ETA:{RESET}     {format_time(remaining)}")
 
-    # Temperatures
+    # Temperatures (always shown)
     nozzle_temp = p.get("nozzle_temper")
     nozzle_target = p.get("nozzle_target_temper")
     bed_temp = p.get("bed_temper")
@@ -224,25 +350,30 @@ def print_status(data):
             print(f"    Chamber: {chamber_temp}°C")
 
     # Fan speeds
-    fan_gear = p.get("fan_gear")
-    if fan_gear is not None:
-        print(f"\n  {DIM}Fan: {fan_gear}{RESET}")
+    part_fan = p.get("cooling_fan_speed")
+    hotend_fan = p.get("heatbreak_fan_speed")
+    aux_fan = p.get("big_fan1_speed")
+    chamber_fan = p.get("big_fan2_speed")
 
-    # HMS errors
-    hms = p.get("hms", [])
-    if hms:
-        print(f"\n  {RED}{BOLD}⚠ Errors / Warnings{RESET}")
-        for entry in hms:
-            attr = entry.get("attr", 0)
-            code = entry.get("code", 0)
-            # Build the code string from attr+code
-            code_str = f"{attr:04X}_{code:04X}"
-            desc = HMS_ERRORS.get(code_str, f"Unknown error ({code_str})")
-            severity = (attr >> 16) & 0xFF
+    if any(v is not None for v in [part_fan, hotend_fan, aux_fan, chamber_fan]):
+        print(f"\n  {BLUE}{BOLD}Fans{RESET}")
+        if part_fan is not None:
+            print(f"    Part cooling: {_fan_pct(part_fan)}")
+        if hotend_fan is not None:
+            print(f"    Hotend:       {_fan_pct(hotend_fan)}")
+        if aux_fan is not None:
+            print(f"    Auxiliary:    {_fan_pct(aux_fan)}")
+        if chamber_fan is not None:
+            print(f"    Chamber:      {_fan_pct(chamber_fan)}")
+
+    # --- Error log (errors that appeared after monitor started) ---
+    if _error_log:
+        print(f"\n  {RED}{BOLD}⚠ Errors (this session){RESET}")
+        for stamp, severity, desc, code_str in _error_log:
             if severity >= 3:
-                print(f"    {RED}[ERROR] {desc}{RESET}")
+                print(f"    {RED}[{stamp}] {desc}{RESET}")
             else:
-                print(f"    {YELLOW}[WARN]  {desc}{RESET}")
+                print(f"    {YELLOW}[{stamp}] {desc}{RESET}")
 
     print(f"\n{DIM}  Last update: {time.strftime('%H:%M:%S')}{RESET}")
     print(f"{DIM}  Ctrl+C to exit{RESET}")
@@ -253,22 +384,38 @@ def print_status(data):
         print(msg_block)
 
 
+POLL_INTERVAL = 5  # seconds between pushall requests
+
+
+def _request_pushall(client):
+    """Send a pushall request to the printer."""
+    request_topic = f"device/{config.BAMBU_SERIAL}/request"
+    push_all = json.dumps({
+        "pushing": {"sequence_id": "0", "command": "pushall"}
+    })
+    client.publish(request_topic, push_all)
+
+
+def _poll_loop(client):
+    """Daemon thread: periodically request full status from the printer."""
+    while True:
+        time.sleep(POLL_INTERVAL)
+        try:
+            _request_pushall(client)
+        except Exception:
+            pass
+
+
 def on_connect(client, userdata, flags, reason_code, properties):
     if reason_code == 0:
-        add_message("Connected to printer", "info")
         topic = f"device/{config.BAMBU_SERIAL}/report"
         client.subscribe(topic)
-        add_message(f"Subscribed to {topic}", "info")
-
-        # Request full status dump
-        request_topic = f"device/{config.BAMBU_SERIAL}/request"
-        push_all = json.dumps({
-            "pushing": {"sequence_id": "0", "command": "pushall"}
-        })
-        client.publish(request_topic, push_all)
-        add_message("Requested full status...", "info")
+        _request_pushall(client)
     else:
         add_message(f"Connection failed: {reason_code}", "error")
+
+
+DEBUG_LOG = os.environ.get("BAMBU_DEBUG")
 
 
 def on_message(client, userdata, msg):
@@ -277,8 +424,13 @@ def on_message(client, userdata, msg):
     except json.JSONDecodeError:
         return
 
-    if "print" in data:
-        print_status(data)
+    if DEBUG_LOG:
+        with open(DEBUG_LOG, "a") as f:
+            f.write(json.dumps(data, indent=2) + "\n---\n")
+
+    _track_errors(data)
+    _update_state(data)
+    print_status()
 
 
 def main():
@@ -288,7 +440,8 @@ def main():
     key_thread = threading.Thread(target=_key_listener, daemon=True)
     key_thread.start()
 
-    add_message(f"Connecting to Bambu P1S at {config.BAMBU_IP}...", "info")
+    clear_screen()
+    print(f"{BOLD}Connecting to Bambu P1S at {config.BAMBU_IP}...{RESET}")
 
     client = mqtt.Client(
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
@@ -305,6 +458,10 @@ def main():
 
     client.on_connect = on_connect
     client.on_message = on_message
+
+    # Start periodic polling thread
+    poll_thread = threading.Thread(target=_poll_loop, args=(client,), daemon=True)
+    poll_thread.start()
 
     # Graceful shutdown
     def shutdown(sig, frame):
