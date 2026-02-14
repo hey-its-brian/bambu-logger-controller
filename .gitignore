@@ -1,3 +1,9 @@
+# macOS trash
+.DS_Store
+.AppleDouble
+.LSOverride
+.claude
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
