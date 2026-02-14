@@ -2,10 +2,14 @@
 """Bambu Lab P1S printer monitor — streams live status over MQTT."""
 
 import json
+import os
 import signal
 import ssl
 import sys
+import termios
+import threading
 import time
+import tty
 
 import paho.mqtt.client as mqtt
 
@@ -57,6 +61,78 @@ GCODE_STATES = {
     "SLICING": "Slicing",
     "UNKNOWN": "Unknown",
 }
+
+
+# --- Persistent message buffer ---
+_messages = []
+_messages_lock = threading.Lock()
+
+
+def add_message(text, level="info"):
+    """Append a persistent message (shown until dismissed by keypress)."""
+    stamp = time.strftime("%H:%M:%S")
+    with _messages_lock:
+        _messages.append({"text": text, "level": level, "time": stamp})
+
+
+def clear_messages():
+    """Clear all persistent messages."""
+    with _messages_lock:
+        _messages.clear()
+
+
+def _render_messages():
+    """Return string block for any buffered messages."""
+    with _messages_lock:
+        if not _messages:
+            return ""
+        lines = [f"\n  {BOLD}{'─' * 46}{RESET}"]
+        for msg in _messages:
+            level = msg["level"]
+            stamp = msg["time"]
+            text = msg["text"]
+            if level == "error":
+                lines.append(f"  {RED}[{stamp}] {text}{RESET}")
+            elif level == "warning":
+                lines.append(f"  {YELLOW}[{stamp}] {text}{RESET}")
+            else:
+                lines.append(f"  {DIM}[{stamp}] {text}{RESET}")
+        lines.append(f"  {DIM}Press any key to clear messages{RESET}")
+        return "\n".join(lines)
+
+
+# --- Non-blocking key listener ---
+_original_term_settings = None
+
+
+def _key_listener():
+    """Daemon thread: wait for any keypress, then clear the message buffer."""
+    global _original_term_settings
+    fd = sys.stdin.fileno()
+    try:
+        _original_term_settings = termios.tcgetattr(fd)
+        tty.setraw(fd)
+        while True:
+            ch = os.read(fd, 1)
+            if ch:
+                clear_messages()
+                # Ctrl-C passes through so signal handler can fire
+                if ch == b"\x03":
+                    os.kill(os.getpid(), signal.SIGINT)
+    except OSError:
+        pass
+    finally:
+        if _original_term_settings:
+            termios.tcsetattr(fd, termios.TCSADRAIN, _original_term_settings)
+
+
+def _restore_terminal():
+    """Restore terminal settings (called on shutdown)."""
+    if _original_term_settings:
+        try:
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, _original_term_settings)
+        except OSError:
+            pass
 
 
 def clear_screen():
@@ -171,13 +247,18 @@ def print_status(data):
     print(f"\n{DIM}  Last update: {time.strftime('%H:%M:%S')}{RESET}")
     print(f"{DIM}  Ctrl+C to exit{RESET}")
 
+    # Persistent messages
+    msg_block = _render_messages()
+    if msg_block:
+        print(msg_block)
+
 
 def on_connect(client, userdata, flags, reason_code, properties):
     if reason_code == 0:
-        print(f"{GREEN}Connected to printer{RESET}")
+        add_message("Connected to printer", "info")
         topic = f"device/{config.BAMBU_SERIAL}/report"
         client.subscribe(topic)
-        print(f"{DIM}Subscribed to {topic}{RESET}")
+        add_message(f"Subscribed to {topic}", "info")
 
         # Request full status dump
         request_topic = f"device/{config.BAMBU_SERIAL}/request"
@@ -185,10 +266,9 @@ def on_connect(client, userdata, flags, reason_code, properties):
             "pushing": {"sequence_id": "0", "command": "pushall"}
         })
         client.publish(request_topic, push_all)
-        print(f"{DIM}Requested full status...{RESET}")
+        add_message("Requested full status...", "info")
     else:
-        print(f"{RED}Connection failed: {reason_code}{RESET}")
-        sys.exit(1)
+        add_message(f"Connection failed: {reason_code}", "error")
 
 
 def on_message(client, userdata, msg):
@@ -204,7 +284,11 @@ def on_message(client, userdata, msg):
 def main():
     config.validate()
 
-    print(f"{BOLD}Connecting to Bambu P1S at {config.BAMBU_IP}...{RESET}")
+    # Start non-blocking key listener (daemon thread)
+    key_thread = threading.Thread(target=_key_listener, daemon=True)
+    key_thread.start()
+
+    add_message(f"Connecting to Bambu P1S at {config.BAMBU_IP}...", "info")
 
     client = mqtt.Client(
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
@@ -224,6 +308,7 @@ def main():
 
     # Graceful shutdown
     def shutdown(sig, frame):
+        _restore_terminal()
         print(f"\n{YELLOW}Disconnecting...{RESET}")
         client.disconnect()
         client.loop_stop()
@@ -232,8 +317,15 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    client.connect(config.BAMBU_IP, port=8883, keepalive=60)
-    client.loop_forever()
+    try:
+        client.connect(config.BAMBU_IP, port=8883, keepalive=60)
+        client.loop_forever()
+    except Exception as e:
+        add_message(f"Connection error: {e}", "error")
+        # Keep running briefly so the user can see the error
+        time.sleep(30)
+    finally:
+        _restore_terminal()
 
 
 if __name__ == "__main__":
