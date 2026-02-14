@@ -10,7 +10,7 @@ A simple Python CLI tool that connects to a Bambu Lab P1S printer over MQTT and 
 - Color-coded terminal output
 - Graceful Ctrl+C disconnect
 
-## Requirements
+## Requirements:
 
 - Python 3.8+
 - Bambu Lab P1S printer in LAN-only dev mode
