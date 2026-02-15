@@ -132,6 +132,18 @@ def _fan_pct(speed_val):
     return f"{pct}%"
 
 
+# --- MQTT command support ---
+_mqtt_client = None
+_light_on = True
+_pending_confirm = None
+
+SPEED_NAMES = {
+    "1": "Silent",
+    "2": "Standard",
+    "3": "Sport",
+    "4": "Ludicrous",
+}
+
 # --- Persistent message buffer ---
 _messages = []
 _messages_lock = threading.Lock()
@@ -148,6 +160,15 @@ def clear_messages():
     """Clear all persistent messages."""
     with _messages_lock:
         _messages.clear()
+
+
+def _send_command(payload):
+    """Publish a command to the printer via MQTT."""
+    if _mqtt_client is None:
+        add_message("Not connected to printer", "error")
+        return
+    topic = f"device/{config.BAMBU_SERIAL}/request"
+    _mqtt_client.publish(topic, json.dumps(payload))
 
 
 def _render_messages():
@@ -174,8 +195,63 @@ def _render_messages():
 _original_term_settings = None
 
 
+def _handle_key(key):
+    """Process a single keypress: dispatch commands or clear messages."""
+    global _pending_confirm, _light_on
+
+    CONFIRM_KEYS = {
+        "h": ("HOME ALL AXES", {"print": {"sequence_id": "0", "command": "gcode_line", "param": "G28\n"}}),
+        "p": ("PAUSE", {"print": {"sequence_id": "0", "command": "pause"}}),
+        "s": ("STOP", {"print": {"sequence_id": "0", "command": "stop"}}),
+    }
+
+    # Check if this key is confirming a pending destructive command
+    if _pending_confirm is not None:
+        if key == _pending_confirm:
+            label, payload = CONFIRM_KEYS[key]
+            _send_command(payload)
+            add_message(f"Sent: {label}")
+            _pending_confirm = None
+            return
+        else:
+            add_message("Cancelled")
+            _pending_confirm = None
+            # Fall through to process this new key normally
+
+    # Destructive commands: require confirmation
+    if key in CONFIRM_KEYS:
+        label, _ = CONFIRM_KEYS[key]
+        _pending_confirm = key
+        add_message(f"Press {key} again to confirm {label}", "warning")
+        return
+
+    # Light toggle
+    if key == "l":
+        _light_on = not _light_on
+        mode = "on" if _light_on else "off"
+        _send_command({"system": {"sequence_id": "0", "command": "ledctrl",
+                                  "led_node": "chamber_light", "led_mode": mode}})
+        add_message(f"Light: {mode}")
+        return
+
+    # Resume
+    if key == "r":
+        _send_command({"print": {"sequence_id": "0", "command": "resume"}})
+        add_message("Sent: RESUME")
+        return
+
+    # Speed presets
+    if key in SPEED_NAMES:
+        _send_command({"print": {"sequence_id": "0", "command": "print_speed", "param": key}})
+        add_message(f"Speed: {SPEED_NAMES[key]}")
+        return
+
+    # Any other key: just clear messages
+    clear_messages()
+
+
 def _key_listener():
-    """Daemon thread: wait for any keypress, then clear the message buffer."""
+    """Daemon thread: wait for keypresses and dispatch commands."""
     global _original_term_settings
     fd = sys.stdin.fileno()
     try:
@@ -187,10 +263,11 @@ def _key_listener():
         while True:
             ch = os.read(fd, 1)
             if ch:
-                clear_messages()
                 # Ctrl-C passes through so signal handler can fire
                 if ch == b"\x03":
                     os.kill(os.getpid(), signal.SIGINT)
+                else:
+                    _handle_key(ch.decode("ascii", errors="ignore"))
     except OSError:
         pass
     finally:
@@ -376,6 +453,7 @@ def print_status():
                 print(f"    {YELLOW}[{stamp}] {desc}{RESET}")
 
     print(f"\n{DIM}  Last update: {time.strftime('%H:%M:%S')}{RESET}")
+    print(f"{DIM}  h:home l:light p:pause r:resume s:stop 1-4:speed{RESET}")
     print(f"{DIM}  Ctrl+C to exit{RESET}")
 
     # Persistent messages
@@ -458,6 +536,9 @@ def main():
 
     client.on_connect = on_connect
     client.on_message = on_message
+
+    global _mqtt_client
+    _mqtt_client = client
 
     # Start periodic polling thread
     poll_thread = threading.Thread(target=_poll_loop, args=(client,), daemon=True)
