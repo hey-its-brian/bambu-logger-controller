@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bambu P1S Monitor</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header>
+        <h1>Bambu P1S Monitor</h1>
+        <span id="wifi" class="wifi"></span>
+    </header>
+
+    <div id="disconnected" class="banner hidden">Reconnecting to server&hellip;</div>
+
+    <main>
+        <section class="card" id="print-info">
+            <h2>Print Status</h2>
+            <div class="field">
+                <span class="label">State:</span>
+                <span id="state" class="value">--</span>
+            </div>
+            <div class="field" id="file-row">
+                <span class="label">File:</span>
+                <span id="filename" class="value">--</span>
+            </div>
+            <div id="progress-row">
+                <div class="field">
+                    <span class="label">Progress:</span>
+                    <span id="progress-text" class="value">--%</span>
+                </div>
+                <div class="progress-bar">
+                    <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+                </div>
+            </div>
+            <div class="field" id="layer-row">
+                <span class="label">Layer:</span>
+                <span id="layer" class="value">--</span>
+            </div>
+            <div class="field" id="eta-row">
+                <span class="label">ETA:</span>
+                <span id="eta" class="value">--:--</span>
+            </div>
+        </section>
+
+        <section class="card" id="temps-fans">
+            <div id="temps">
+                <h2>Temperatures</h2>
+                <div class="field">
+                    <span class="label">Nozzle:</span>
+                    <span id="nozzle" class="value">--</span>
+                </div>
+                <div class="field">
+                    <span class="label">Bed:</span>
+                    <span id="bed" class="value">--</span>
+                </div>
+                <div class="field">
+                    <span class="label">Chamber:</span>
+                    <span id="chamber" class="value">--</span>
+                </div>
+            </div>
+            <div id="fans">
+                <h2>Fans</h2>
+                <div id="fan-list"></div>
+            </div>
+        </section>
+
+        <section class="card" id="errors-card">
+            <h2>Errors</h2>
+            <div id="error-list">
+                <span class="dim">No errors</span>
+            </div>
+        </section>
+
+        <section class="card" id="ams-card">
+            <h2>AMS Filaments</h2>
+            <div id="ams-list">
+                <span class="dim">No AMS data</span>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <span id="last-update">Last update: --:--:--</span>
+    </footer>
+
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script>
+        const socket = io();
+
+        socket.on("connect", () => {
+            document.getElementById("disconnected").classList.add("hidden");
+        });
+
+        socket.on("disconnect", () => {
+            document.getElementById("disconnected").classList.remove("hidden");
+        });
+
+        socket.on("printer_state", (data) => {
+            updateDashboard(data);
+        });
+
+        function updateDashboard(d) {
+            // State
+            const stateEl = document.getElementById("state");
+            stateEl.textContent = d.state_label || "--";
+            stateEl.className = "value state-" + (d.state || "").toLowerCase();
+
+            // WiFi
+            const wifiEl = document.getElementById("wifi");
+            if (d.wifi_signal != null) {
+                const val = String(d.wifi_signal).replace("dBm", "");
+                wifiEl.textContent = "WiFi: " + val + "dBm";
+            }
+
+            // File
+            const fileRow = document.getElementById("file-row");
+            const filenameEl = document.getElementById("filename");
+            if (d.filename && d.state !== "IDLE") {
+                filenameEl.textContent = d.filename;
+                fileRow.classList.remove("hidden");
+            } else {
+                fileRow.classList.add("hidden");
+            }
+
+            // Progress
+            const progressRow = document.getElementById("progress-row");
+            if (d.progress != null && d.state !== "IDLE") {
+                document.getElementById("progress-text").textContent = d.progress + "%";
+                document.getElementById("progress-fill").style.width = d.progress + "%";
+                progressRow.classList.remove("hidden");
+            } else {
+                progressRow.classList.add("hidden");
+            }
+
+            // Layer
+            const layerRow = document.getElementById("layer-row");
+            if (d.layer != null && d.total_layers && d.state !== "IDLE") {
+                document.getElementById("layer").textContent = d.layer + "/" + d.total_layers;
+                layerRow.classList.remove("hidden");
+            } else {
+                layerRow.classList.add("hidden");
+            }
+
+            // ETA
+            const etaRow = document.getElementById("eta-row");
+            if (d.eta && d.eta !== "--:--" && d.state !== "IDLE") {
+                document.getElementById("eta").textContent = d.eta;
+                etaRow.classList.remove("hidden");
+            } else {
+                etaRow.classList.add("hidden");
+            }
+
+            // Temperatures
+            document.getElementById("nozzle").textContent = d.nozzle || "--";
+            document.getElementById("bed").textContent = d.bed || "--";
+            document.getElementById("chamber").textContent =
+                d.chamber_temp != null ? d.chamber_temp + "\u00B0C" : "--";
+
+            // Fans
+            const fanList = document.getElementById("fan-list");
+            if (d.fans && Object.keys(d.fans).length > 0) {
+                fanList.innerHTML = "";
+                for (const [name, pct] of Object.entries(d.fans)) {
+                    const div = document.createElement("div");
+                    div.className = "field";
+                    div.innerHTML =
+                        '<span class="label">' + esc(name) + ':</span>' +
+                        '<span class="value">' + esc(pct) + '</span>';
+                    fanList.appendChild(div);
+                }
+            } else {
+                fanList.innerHTML = '<span class="dim">No fan data</span>';
+            }
+
+            // Errors
+            const errorList = document.getElementById("error-list");
+            if (d.errors && d.errors.length > 0) {
+                errorList.innerHTML = "";
+                for (const err of d.errors) {
+                    const div = document.createElement("div");
+                    div.className = "error-entry severity-" + (err.severity >= 3 ? "high" : "low");
+                    div.innerHTML =
+                        '<span class="error-time">[' + esc(err.time) + ']</span> ' +
+                        '<span class="error-desc">' + esc(err.description) + '</span>';
+                    errorList.appendChild(div);
+                }
+            } else {
+                errorList.innerHTML = '<span class="dim">No errors</span>';
+            }
+
+            // AMS
+            const amsList = document.getElementById("ams-list");
+            if (d.ams && d.ams.length > 0) {
+                amsList.innerHTML = "";
+                for (const unit of d.ams) {
+                    if (unit.humidity != null || unit.temp != null) {
+                        const meta = document.createElement("div");
+                        meta.className = "ams-meta dim";
+                        const parts = [];
+                        if (unit.humidity != null) parts.push("H:" + unit.humidity + "%");
+                        if (unit.temp != null) parts.push("T:" + unit.temp + "\u00B0C");
+                        meta.textContent = parts.join(" ");
+                        amsList.appendChild(meta);
+                    }
+                    for (const tray of unit.trays) {
+                        const div = document.createElement("div");
+                        div.className = "ams-tray";
+                        if (!tray.type) {
+                            div.innerHTML =
+                                '<span class="ams-slot">Slot ' + tray.slot + ':</span> ' +
+                                '<span class="dim">(empty)</span>';
+                        } else {
+                            let swatch = "";
+                            if (tray.color) {
+                                swatch = '<span class="color-swatch" style="background:#' +
+                                    esc(tray.color) + '"></span> ';
+                            }
+                            const name = tray.color_name ? " (" + esc(tray.color_name) + ")" : "";
+                            div.innerHTML =
+                                '<span class="ams-slot">Slot ' + tray.slot + ':</span> ' +
+                                swatch + esc(tray.type) + name;
+                        }
+                        amsList.appendChild(div);
+                    }
+                }
+            } else {
+                amsList.innerHTML = '<span class="dim">No AMS data</span>';
+            }
+
+            // Last update
+            document.getElementById("last-update").textContent =
+                "Last update: " + (d.last_update || "--:--:--");
+        }
+
+        function esc(s) {
+            const el = document.createElement("span");
+            el.textContent = s;
+            return el.innerHTML;
+        }
+    </script>
+</body>
+</html>
