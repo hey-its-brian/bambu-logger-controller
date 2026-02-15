@@ -2,7 +2,9 @@
 """Bambu Lab P1S printer monitor — streams live status over MQTT."""
 
 import json
+import math
 import os
+import re
 import select
 import signal
 import ssl
@@ -25,6 +27,80 @@ YELLOW = "\033[93m"
 BLUE = "\033[94m"
 CYAN = "\033[96m"
 DIM = "\033[2m"
+
+# --- Layout helpers ---
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+
+
+def _get_term_width():
+    """Get terminal width, defaulting to 80."""
+    try:
+        return os.get_terminal_size().columns
+    except OSError:
+        return 80
+
+
+def _visible_len(s):
+    """String length ignoring ANSI escape codes."""
+    return len(_ANSI_RE.sub("", s))
+
+
+def _render_columns(left, right, left_width, gap=3):
+    """Merge two lists of strings side-by-side with padding."""
+    lines = []
+    height = max(len(left), len(right))
+    spacer = " " * gap
+    for i in range(height):
+        l = left[i] if i < len(left) else ""
+        r = right[i] if i < len(right) else ""
+        pad = left_width - _visible_len(l)
+        lines.append(l + " " * max(pad, 0) + spacer + r)
+    return lines
+
+
+# --- Color name lookup for AMS filaments ---
+COLOR_NAMES = {
+    "000000": "Black",
+    "FFFFFF": "White",
+    "FF0000": "Red",
+    "00FF00": "Green",
+    "0000FF": "Blue",
+    "FFFF00": "Yellow",
+    "FF00FF": "Magenta",
+    "00FFFF": "Cyan",
+    "FF8000": "Orange",
+    "800080": "Purple",
+    "FFC0CB": "Pink",
+    "A52A2A": "Brown",
+    "808080": "Gray",
+    "C0C0C0": "Silver",
+}
+
+
+def _color_name(hex_color):
+    """Map a hex color string to a human-readable name."""
+    if not hex_color or len(hex_color) < 6:
+        return ""
+    # Normalize: take first 6 chars, uppercase, strip leading #
+    h = hex_color.lstrip("#")[:6].upper()
+    if h in COLOR_NAMES:
+        return COLOR_NAMES[h]
+    # Nearest-neighbor search
+    try:
+        r1, g1, b1 = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except ValueError:
+        return f"#{h}"
+    best_name, best_dist = None, float("inf")
+    for ref_hex, name in COLOR_NAMES.items():
+        r2, g2, b2 = int(ref_hex[0:2], 16), int(ref_hex[2:4], 16), int(ref_hex[4:6], 16)
+        dist = math.sqrt((r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2)
+        if dist < best_dist:
+            best_dist = dist
+            best_name = name
+    if best_dist < 100:
+        return best_name
+    return f"#{h}"
+
 
 # --- Error code lookups ---
 # HMS errors: keyed by full 16-char code (XXXX_XXXX_XXXX_XXXX)
@@ -136,14 +212,6 @@ def _fan_pct(speed_val):
 # --- MQTT command support ---
 _mqtt_client = None
 _light_on = True
-_pending_confirm = None
-
-SPEED_NAMES = {
-    "1": "Silent",
-    "2": "Standard",
-    "3": "Sport",
-    "4": "Ludicrous",
-}
 
 # --- Persistent message buffer ---
 _messages = []
@@ -172,12 +240,12 @@ def _send_command(payload):
     _mqtt_client.publish(topic, json.dumps(payload))
 
 
-def _render_messages():
-    """Return string block for any buffered messages."""
+def _render_messages_lines():
+    """Return list of message lines for display."""
     with _messages_lock:
         if not _messages:
-            return ""
-        lines = [f"\n  {BOLD}{'─' * 46}{RESET}"]
+            return []
+        lines = []
         for msg in _messages:
             level = msg["level"]
             stamp = msg["time"]
@@ -188,8 +256,8 @@ def _render_messages():
                 lines.append(f"  {YELLOW}[{stamp}] {text}{RESET}")
             else:
                 lines.append(f"  {DIM}[{stamp}] {text}{RESET}")
-        lines.append(f"  {DIM}Press any key to clear messages{RESET}")
-        return "\n".join(lines)
+        lines.append(f"  {DIM}Press any key to clear{RESET}")
+        return lines
 
 
 # --- Non-blocking key listener ---
@@ -198,34 +266,7 @@ _original_term_settings = None
 
 def _handle_key(key):
     """Process a single keypress: dispatch commands or clear messages."""
-    global _pending_confirm, _light_on
-
-    CONFIRM_KEYS = {
-        "p": "PAUSE",
-        "s": "STOP",
-    }
-
-    # Check if this key is confirming a pending destructive command
-    if _pending_confirm is not None:
-        if key == _pending_confirm:
-            label = CONFIRM_KEYS[key]
-            if key == "p":
-                _send_command({"print": {"sequence_id": "0", "command": "pause"}})
-            elif key == "s":
-                _send_command({"print": {"sequence_id": "0", "command": "stop"}})
-            add_message(f"Sent: {label}")
-            _pending_confirm = None
-            return
-        else:
-            add_message("Cancelled")
-            _pending_confirm = None
-            # Fall through to process this new key normally
-
-    # Destructive commands: require confirmation
-    if key in CONFIRM_KEYS:
-        _pending_confirm = key
-        add_message(f"Press {key} again to confirm {CONFIRM_KEYS[key]}", "warning")
-        return
+    global _light_on
 
     # Light toggle
     if key == "l":
@@ -234,18 +275,6 @@ def _handle_key(key):
         _send_command({"system": {"sequence_id": "0", "command": "ledctrl",
                                   "led_node": "chamber_light", "led_mode": mode}})
         add_message(f"Light: {mode}")
-        return
-
-    # Resume
-    if key == "r":
-        _send_command({"print": {"sequence_id": "0", "command": "resume"}})
-        add_message("Sent: RESUME")
-        return
-
-    # Speed presets
-    if key in SPEED_NAMES:
-        _send_command({"print": {"sequence_id": "0", "command": "print_speed", "param": key}})
-        add_message(f"Speed: {SPEED_NAMES[key]}")
         return
 
     # Any other key: just clear messages
@@ -307,16 +336,24 @@ def format_temp(actual, target):
 
 # --- Persistent printer state (accumulates across MQTT messages) ---
 _printer_state = {}
+_ams_state = []  # list of AMS units with trays
 
 
 def _update_state(data):
     """Merge incoming data into persistent state."""
+    global _ams_state
     updated = False
     for key in ("print", "system", "pushing"):
         section = data.get(key, {})
         if section and isinstance(section, dict):
             _printer_state.update(section)
             updated = True
+    # Extract AMS data
+    ams_section = data.get("print", {}).get("ams", {})
+    if isinstance(ams_section, dict):
+        ams_units = ams_section.get("ams")
+        if isinstance(ams_units, list):
+            _ams_state = ams_units
     return updated
 
 
@@ -359,6 +396,172 @@ def _track_errors(data):
             _error_log.append((stamp, severity, desc, code_str))
 
 
+def _render_header(term_width):
+    """Return header lines with WiFi signal right-aligned."""
+    p = _printer_state
+    wifi = p.get("wifi_signal")
+    title = " Bambu P1S Monitor"
+    lines = [f"{BOLD}{'=' * term_width}{RESET}"]
+    if wifi is not None:
+        wifi_val = str(wifi).replace("dBm", "")
+        wifi_str = f"WiFi: {wifi_val}dBm"
+        pad = term_width - len(title) - len(wifi_str) - 1
+        lines.append(f"{BOLD}{title}{' ' * max(pad, 1)}{RESET}{DIM}{wifi_str}{RESET}")
+    else:
+        lines.append(f"{BOLD}{title}{RESET}")
+    lines.append(f"{BOLD}{'=' * term_width}{RESET}")
+    return lines
+
+
+def _build_print_info(p, state, state_str, col_width):
+    """Build left column: state, file, progress, layer, ETA."""
+    lines = [f"  {BOLD}State:{RESET}  {state_str}"]
+    if state not in ("IDLE", ""):
+        filename = p.get("gcode_file", "") or p.get("subtask_name", "")
+        if filename:
+            max_fn = col_width - 12
+            if max_fn < 10:
+                max_fn = 10
+            if len(filename) > max_fn:
+                filename = "..." + filename[-(max_fn - 3):]
+            lines.append(f"  {BOLD}File:{RESET}   {filename}")
+
+        progress = p.get("mc_percent")
+        if progress is not None:
+            bar_width = max(col_width - 22, 10)
+            filled = int(bar_width * int(progress) / 100)
+            bar = f"[{'█' * filled}{'░' * (bar_width - filled)}]"
+            lines.append(f"  {BOLD}Progress:{RESET} {bar} {progress}%")
+
+        layer = p.get("layer_num")
+        total_layers = p.get("total_layer_num")
+        if layer is not None and total_layers:
+            lines.append(f"  {BOLD}Layer:{RESET}   {layer}/{total_layers}")
+
+        remaining = p.get("mc_remaining_time")
+        if remaining is not None:
+            lines.append(f"  {BOLD}ETA:{RESET}     {format_time(remaining)}")
+    return lines
+
+
+def _build_temp_fans(p):
+    """Build right column: temperatures and fan speeds."""
+    lines = []
+    nozzle_temp = p.get("nozzle_temper")
+    nozzle_target = p.get("nozzle_target_temper")
+    bed_temp = p.get("bed_temper")
+    bed_target = p.get("bed_target_temper")
+    chamber_temp = p.get("chamber_temper")
+
+    if any(v is not None for v in [nozzle_temp, bed_temp, chamber_temp]):
+        lines.append(f"{BLUE}{BOLD}Temperatures{RESET}")
+        if nozzle_temp is not None:
+            lines.append(f"  Nozzle:  {format_temp(nozzle_temp, nozzle_target)}")
+        if bed_temp is not None:
+            lines.append(f"  Bed:     {format_temp(bed_temp, bed_target)}")
+        if chamber_temp is not None:
+            lines.append(f"  Chamber: {chamber_temp}°C")
+
+    part_fan = p.get("cooling_fan_speed")
+    hotend_fan = p.get("heatbreak_fan_speed")
+    aux_fan = p.get("big_fan1_speed")
+    chamber_fan = p.get("big_fan2_speed")
+
+    if any(v is not None for v in [part_fan, hotend_fan, aux_fan, chamber_fan]):
+        lines.append(f"{BLUE}{BOLD}Fans{RESET}")
+        if part_fan is not None:
+            lines.append(f"  Part cooling: {_fan_pct(part_fan)}")
+        if hotend_fan is not None:
+            lines.append(f"  Hotend:       {_fan_pct(hotend_fan)}")
+        if aux_fan is not None:
+            lines.append(f"  Auxiliary:    {_fan_pct(aux_fan)}")
+        if chamber_fan is not None:
+            lines.append(f"  Chamber:      {_fan_pct(chamber_fan)}")
+    return lines
+
+
+def _wrap_text(text, width):
+    """Wrap text to fit within width, breaking on spaces or forcing breaks."""
+    if len(text) <= width:
+        return [text]
+    result = []
+    while len(text) > width:
+        # Try to break at a space
+        brk = text.rfind(" ", 0, width)
+        if brk <= 0:
+            brk = width  # Force break mid-word/URL
+        result.append(text[:brk])
+        text = text[brk:].lstrip()
+    if text:
+        result.append(text)
+    return result
+
+
+def _build_errors_and_messages(col_width=None):
+    """Build bottom-left: error log + persistent messages."""
+    lines = []
+    if _error_log:
+        lines.append(f"  {RED}{BOLD}⚠ Errors (this session){RESET}")
+        # "    [HH:MM:SS] " = 4 + 10 + 2 = 16 chars total
+        prefix_len = 16
+        max_desc = (col_width - prefix_len) if col_width and col_width > 24 else 60
+        # Continuation lines align under the description text
+        cont_pad = " " * (prefix_len - 4)  # 4 leading spaces added separately
+        for stamp, severity, desc, code_str in _error_log:
+            color = RED if severity >= 3 else YELLOW
+            wrapped = _wrap_text(desc, max_desc)
+            lines.append(f"    {color}[{stamp}] {wrapped[0]}{RESET}")
+            for cont in wrapped[1:]:
+                lines.append(f"    {color}{cont_pad}{cont}{RESET}")
+
+    msg_lines = _render_messages_lines()
+    if msg_lines:
+        if lines:
+            lines.append("")
+        lines.extend(msg_lines)
+    return lines
+
+
+def _build_ams_info():
+    """Build bottom-right: AMS filament slots with type and color."""
+    if not _ams_state:
+        return []
+    lines = [f"{BLUE}{BOLD}AMS Filaments{RESET}"]
+    for unit in _ams_state:
+        humidity = unit.get("humidity")
+        temp = unit.get("temp")
+        meta = []
+        if humidity is not None:
+            meta.append(f"H:{humidity}%")
+        if temp is not None:
+            meta.append(f"T:{temp}°C")
+        if meta:
+            lines.append(f"  {DIM}{' '.join(meta)}{RESET}")
+        for tray in unit.get("tray", []):
+            slot_id = int(tray.get("id", 0)) + 1
+            tray_type = tray.get("tray_type", "")
+            tray_color = tray.get("tray_color", "")
+            if not tray_type:
+                lines.append(f"  Slot {slot_id}: {DIM}(empty){RESET}")
+            else:
+                cname = _color_name(tray_color)
+                if cname:
+                    lines.append(f"  Slot {slot_id}: {tray_type} ({cname})")
+                else:
+                    lines.append(f"  Slot {slot_id}: {tray_type}")
+    return lines
+
+
+def _render_footer():
+    """Return footer lines."""
+    return [
+        "",
+        f"{DIM}  Last update: {time.strftime('%H:%M:%S')}{RESET}",
+        f"{DIM}  l:toggle light{RESET}",
+        f"{DIM}  Ctrl+C to exit{RESET}",
+    ]
+
+
 def print_status():
     """Render the current printer state to screen."""
     p = _printer_state
@@ -368,7 +571,6 @@ def print_status():
     state = p.get("gcode_state", "")
     state_label = GCODE_STATES.get(state, state or "Unknown")
 
-    # Color the state
     if state == "RUNNING":
         state_str = f"{GREEN}{BOLD}{state_label}{RESET}"
     elif state in ("PAUSE", "PREPARE"):
@@ -380,88 +582,52 @@ def print_status():
     else:
         state_str = f"{BOLD}{state_label}{RESET}"
 
+    term_width = _get_term_width()
+    narrow = term_width < 60
+
     clear_screen()
-    print(f"{BOLD}{'=' * 50}{RESET}")
-    print(f"{BOLD} Bambu P1S Monitor{RESET}")
-    print(f"{BOLD}{'=' * 50}{RESET}")
 
-    # State
-    print(f"\n  {BOLD}State:{RESET}  {state_str}")
+    # Header
+    for line in _render_header(term_width):
+        print(line)
 
-    # Print job info (only when not idle)
-    if state not in ("IDLE", ""):
-        filename = p.get("gcode_file", "") or p.get("subtask_name", "")
-        if filename:
-            if len(filename) > 35:
-                filename = "..." + filename[-32:]
-            print(f"  {BOLD}File:{RESET}   {filename}")
+    if narrow:
+        # Single-column fallback
+        col_width = term_width - 4
+        for line in _build_print_info(p, state, state_str, col_width):
+            print(line)
+        print()
+        right = _build_temp_fans(p)
+        for line in right:
+            print(f"  {line}")
+        errors = _build_errors_and_messages(col_width)
+        if errors:
+            print()
+            for line in errors:
+                print(line)
+        ams = _build_ams_info()
+        if ams:
+            print()
+            for line in ams:
+                print(f"  {line}")
+    else:
+        # Two-column layout
+        col_width = (term_width - 6) // 2
+        left_top = _build_print_info(p, state, state_str, col_width)
+        right_top = _build_temp_fans(p)
+        print()
+        for line in _render_columns(left_top, right_top, col_width):
+            print(line)
 
-        progress = p.get("mc_percent")
-        if progress is not None:
-            bar_width = 30
-            filled = int(bar_width * int(progress) / 100)
-            bar = f"[{'█' * filled}{'░' * (bar_width - filled)}]"
-            print(f"  {BOLD}Progress:{RESET} {bar} {progress}%")
+        left_bot = _build_errors_and_messages(col_width)
+        right_bot = _build_ams_info()
+        if left_bot or right_bot:
+            print()
+            for line in _render_columns(left_bot, right_bot, col_width):
+                print(line)
 
-        layer = p.get("layer_num")
-        total_layers = p.get("total_layer_num")
-        if layer is not None and total_layers:
-            print(f"  {BOLD}Layer:{RESET}   {layer}/{total_layers}")
-
-        remaining = p.get("mc_remaining_time")
-        if remaining is not None:
-            print(f"  {BOLD}ETA:{RESET}     {format_time(remaining)}")
-
-    # Temperatures (always shown)
-    nozzle_temp = p.get("nozzle_temper")
-    nozzle_target = p.get("nozzle_target_temper")
-    bed_temp = p.get("bed_temper")
-    bed_target = p.get("bed_target_temper")
-    chamber_temp = p.get("chamber_temper")
-
-    if any(v is not None for v in [nozzle_temp, bed_temp, chamber_temp]):
-        print(f"\n  {BLUE}{BOLD}Temperatures{RESET}")
-        if nozzle_temp is not None:
-            print(f"    Nozzle:  {format_temp(nozzle_temp, nozzle_target)}")
-        if bed_temp is not None:
-            print(f"    Bed:     {format_temp(bed_temp, bed_target)}")
-        if chamber_temp is not None:
-            print(f"    Chamber: {chamber_temp}°C")
-
-    # Fan speeds
-    part_fan = p.get("cooling_fan_speed")
-    hotend_fan = p.get("heatbreak_fan_speed")
-    aux_fan = p.get("big_fan1_speed")
-    chamber_fan = p.get("big_fan2_speed")
-
-    if any(v is not None for v in [part_fan, hotend_fan, aux_fan, chamber_fan]):
-        print(f"\n  {BLUE}{BOLD}Fans{RESET}")
-        if part_fan is not None:
-            print(f"    Part cooling: {_fan_pct(part_fan)}")
-        if hotend_fan is not None:
-            print(f"    Hotend:       {_fan_pct(hotend_fan)}")
-        if aux_fan is not None:
-            print(f"    Auxiliary:    {_fan_pct(aux_fan)}")
-        if chamber_fan is not None:
-            print(f"    Chamber:      {_fan_pct(chamber_fan)}")
-
-    # --- Error log (errors that appeared after monitor started) ---
-    if _error_log:
-        print(f"\n  {RED}{BOLD}⚠ Errors (this session){RESET}")
-        for stamp, severity, desc, code_str in _error_log:
-            if severity >= 3:
-                print(f"    {RED}[{stamp}] {desc}{RESET}")
-            else:
-                print(f"    {YELLOW}[{stamp}] {desc}{RESET}")
-
-    print(f"\n{DIM}  Last update: {time.strftime('%H:%M:%S')}{RESET}")
-    print(f"{DIM}  l:light p:pause r:resume s:stop 1-4:speed{RESET}")
-    print(f"{DIM}  Ctrl+C to exit{RESET}")
-
-    # Persistent messages
-    msg_block = _render_messages()
-    if msg_block:
-        print(msg_block)
+    for line in _render_footer():
+        print(line)
 
 
 POLL_INTERVAL = 5  # seconds between pushall requests
