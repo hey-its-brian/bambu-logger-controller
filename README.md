@@ -1,6 +1,6 @@
 # Bambu Lab P1S Monitor
 
-A simple Python CLI tool that connects to a Bambu Lab P1S printer over MQTT and streams live status to the terminal.
+A Bambu Lab P1S printer monitor that connects over MQTT and streams live status. Available as a **terminal TUI** or a **web dashboard** (via Docker).
 
 ## Features
 
@@ -94,6 +94,35 @@ To log raw MQTT JSON to a file:
 ```bash
 BAMBU_DEBUG=/tmp/bambu.log python bambu_monitor.py
 ```
+
+## Web Dashboard (Docker)
+
+A browser-based dashboard that mirrors the TUI with a dark-themed responsive layout. Display-only — no printer commands.
+
+### Requirements
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running
+- Printer accessible on your local network
+
+### Quick Start
+
+```bash
+# Set your printer credentials (or use your existing .env file)
+export BAMBU_IP=192.168.1.100
+export BAMBU_SERIAL=your_serial_number
+export BAMBU_ACCESS_CODE=your_lan_access_code
+
+docker compose up --build
+```
+
+Open `http://localhost:8080` in your browser.
+
+### Features
+
+- Live state updates via Socket.IO (auto-reconnects on disconnect)
+- Two-column responsive grid — collapses to single column on narrow screens
+- Print progress, temperatures, fans, AMS filaments with color swatches, errors, WiFi signal
+- Dark monospace theme matching the terminal aesthetic
 
 ## How It Works
 
