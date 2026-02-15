@@ -200,7 +200,7 @@ def _handle_key(key):
     global _pending_confirm, _light_on
 
     CONFIRM_KEYS = {
-        "h": ("HOME ALL AXES", {"print": {"sequence_id": "0", "command": "gcode_line", "param": "G28\n"}}),
+        "h": ("HOME ALL AXES", {"print": {"sequence_id": "0", "command": "gcode_line", "param": "M412 S0\nG28\nM412 S1\n"}}),
         "p": ("PAUSE", {"print": {"sequence_id": "0", "command": "pause"}}),
         "s": ("STOP", {"print": {"sequence_id": "0", "command": "stop"}}),
     }
