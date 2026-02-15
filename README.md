@@ -49,7 +49,6 @@ While the monitor is running, press a key to send a command to the printer:
 
 | Key | Action |
 |-----|--------|
-| `h` | Home all axes (confirm twice) |
 | `l` | Toggle chamber light |
 | `p` | Pause print (confirm twice) |
 | `r` | Resume print |
@@ -59,7 +58,7 @@ While the monitor is running, press a key to send a command to the printer:
 | `3` | Set speed: Sport |
 | `4` | Set speed: Ludicrous |
 
-Destructive commands (`h`, `p`, `s`) require pressing the key twice to confirm.
+Destructive commands (`p`, `s`) require pressing the key twice to confirm.
 
 ### Debug Mode
 

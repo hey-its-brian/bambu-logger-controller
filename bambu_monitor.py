@@ -40,6 +40,7 @@ HMS_ERRORS = {
     "0500_0200": "Nozzle temperature error: thermal runaway",
     "0500_0300": "Nozzle temperature error: sensor abnormal",
     "0500_0400": "Nozzle clog detected",
+    "0500_0500_0001_0007": "MQTT command verification failed (update firmware/Studio)",
     "0500_0500": "Filament broken or runout",
     # Motors
     "0700_0100": "Motor-X error: driver abnormal",
@@ -200,16 +201,18 @@ def _handle_key(key):
     global _pending_confirm, _light_on
 
     CONFIRM_KEYS = {
-        "h": ("HOME ALL AXES", {"print": {"sequence_id": "0", "command": "gcode_line", "param": "M412 S0\nG28\nM412 S1\n"}}),
-        "p": ("PAUSE", {"print": {"sequence_id": "0", "command": "pause"}}),
-        "s": ("STOP", {"print": {"sequence_id": "0", "command": "stop"}}),
+        "p": "PAUSE",
+        "s": "STOP",
     }
 
     # Check if this key is confirming a pending destructive command
     if _pending_confirm is not None:
         if key == _pending_confirm:
-            label, payload = CONFIRM_KEYS[key]
-            _send_command(payload)
+            label = CONFIRM_KEYS[key]
+            if key == "p":
+                _send_command({"print": {"sequence_id": "0", "command": "pause"}})
+            elif key == "s":
+                _send_command({"print": {"sequence_id": "0", "command": "stop"}})
             add_message(f"Sent: {label}")
             _pending_confirm = None
             return
@@ -220,9 +223,8 @@ def _handle_key(key):
 
     # Destructive commands: require confirmation
     if key in CONFIRM_KEYS:
-        label, _ = CONFIRM_KEYS[key]
         _pending_confirm = key
-        add_message(f"Press {key} again to confirm {label}", "warning")
+        add_message(f"Press {key} again to confirm {CONFIRM_KEYS[key]}", "warning")
         return
 
     # Light toggle
@@ -453,7 +455,7 @@ def print_status():
                 print(f"    {YELLOW}[{stamp}] {desc}{RESET}")
 
     print(f"\n{DIM}  Last update: {time.strftime('%H:%M:%S')}{RESET}")
-    print(f"{DIM}  h:home l:light p:pause r:resume s:stop 1-4:speed{RESET}")
+    print(f"{DIM}  l:light p:pause r:resume s:stop 1-4:speed{RESET}")
     print(f"{DIM}  Ctrl+C to exit{RESET}")
 
     # Persistent messages
