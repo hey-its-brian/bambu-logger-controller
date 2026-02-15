@@ -4,11 +4,14 @@ A simple Python CLI tool that connects to a Bambu Lab P1S printer over MQTT and 
 
 ## Features
 
-- Real-time print progress with progress bar, layer info, and ETA
+- **Two-column responsive layout** — print info on the left, temps/fans on the right; falls back to single column in narrow terminals (<60 cols)
+- Real-time print progress with adaptive progress bar, layer info, and ETA
 - Nozzle, bed, and chamber temperature display
 - Fan speed monitoring (part cooling, hotend, auxiliary, chamber)
-- HMS error/warning codes with human-readable descriptions
-- Keyboard commands to control the printer (see below)
+- **AMS filament display** — slot-by-slot filament type and color name, plus humidity and temperature per unit
+- **WiFi signal strength** in the header
+- HMS error/warning codes with human-readable descriptions (word-wrapped to fit columns)
+- Toggle chamber light via keyboard
 - Color-coded terminal output
 - Graceful Ctrl+C disconnect
 
@@ -45,20 +48,44 @@ The monitor connects to the printer's MQTT broker over TLS (port 8883), requests
 
 ### Keyboard Commands
 
-While the monitor is running, press a key to send a command to the printer:
+While the monitor is running:
 
 | Key | Action |
 |-----|--------|
 | `l` | Toggle chamber light |
-| `p` | Pause print (confirm twice) |
-| `r` | Resume print |
-| `s` | Stop print (confirm twice) |
-| `1` | Set speed: Silent |
-| `2` | Set speed: Standard |
-| `3` | Set speed: Sport |
-| `4` | Set speed: Ludicrous |
 
-Destructive commands (`p`, `s`) require pressing the key twice to confirm.
+Any other key clears on-screen messages.
+
+### Layout
+
+At 80+ columns, the monitor renders a two-column layout:
+
+```
+==============================================================================
+ Bambu P1S Monitor                                           WiFi: -39dBm
+==============================================================================
+
+  State:  Printing                         Temperatures
+  File:   benchy.3mf                         Nozzle:  215.0/220°C
+  Progress: [████████████░░░░░░] 67%         Bed:     60.0/60°C
+  Layer:   45/120                            Chamber: 32°C
+  ETA:     1:23                            Fans
+                                             Part cooling: 100%
+                                             Hotend:       67%
+
+  ⚠ Errors (this session)                 AMS Filaments
+    [14:23:01] Nozzle clog detected          H:4% T:28°C
+                                             Slot 1: PLA (White)
+                                             Slot 2: PLA (Black)
+                                             Slot 3: (empty)
+                                             Slot 4: PLA (Red)
+
+  Last update: 14:23:05
+  l:toggle light
+  Ctrl+C to exit
+```
+
+Terminals narrower than 60 columns automatically fall back to a single-column view.
 
 ### Debug Mode
 
