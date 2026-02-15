@@ -6,7 +6,9 @@ A simple Python CLI tool that connects to a Bambu Lab P1S printer over MQTT and 
 
 - Real-time print progress with progress bar, layer info, and ETA
 - Nozzle, bed, and chamber temperature display
+- Fan speed monitoring (part cooling, hotend, auxiliary, chamber)
 - HMS error/warning codes with human-readable descriptions
+- Keyboard commands to control the printer (see below)
 - Color-coded terminal output
 - Graceful Ctrl+C disconnect
 
@@ -40,6 +42,32 @@ python bambu_monitor.py
 ```
 
 The monitor connects to the printer's MQTT broker over TLS (port 8883), requests a full status dump, then continuously displays updates as they arrive.
+
+### Keyboard Commands
+
+While the monitor is running, press a key to send a command to the printer:
+
+| Key | Action |
+|-----|--------|
+| `h` | Home all axes (confirm twice) |
+| `l` | Toggle chamber light |
+| `p` | Pause print (confirm twice) |
+| `r` | Resume print |
+| `s` | Stop print (confirm twice) |
+| `1` | Set speed: Silent |
+| `2` | Set speed: Standard |
+| `3` | Set speed: Sport |
+| `4` | Set speed: Ludicrous |
+
+Destructive commands (`h`, `p`, `s`) require pressing the key twice to confirm.
+
+### Debug Mode
+
+To log raw MQTT JSON to a file:
+
+```bash
+BAMBU_DEBUG=/tmp/bambu.log python bambu_monitor.py
+```
 
 ## How It Works
 
