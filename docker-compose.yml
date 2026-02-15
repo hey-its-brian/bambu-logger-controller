@@ -1,12 +1,8 @@
 services:
   bambu-web:
     build: .
-    # network_mode: host gives the container direct LAN access to reach
-    # the printer. If your Docker setup supports it, you can instead use:
-    #   ports:
-    #     - "5000:5000"
-    # and ensure the printer IP is routable from the Docker network.
-    network_mode: host
+    ports:
+      - "8080:5000"
     environment:
       - BAMBU_IP=${BAMBU_IP}
       - BAMBU_SERIAL=${BAMBU_SERIAL}
