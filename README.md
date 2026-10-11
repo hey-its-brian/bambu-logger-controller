@@ -97,7 +97,9 @@ BAMBU_DEBUG=/tmp/bambu.log python bambu_monitor.py
 
 ## Web Dashboard (Docker)
 
-A browser-based dashboard that mirrors the TUI with a dark-themed responsive layout. Display-only — no printer commands.
+A browser-based dashboard built to be read from across the room: a large progress ring, heat bars that show actual vs target, spool tiles for each AMS slot, a 30-minute temperature chart, and a small set of printer controls.
+
+![Dashboard](docs/dashboard.png)
 
 ### Requirements
 
@@ -119,10 +121,32 @@ Open `http://localhost:8080` in your browser.
 
 ### Features
 
-- Live state updates via Socket.IO (auto-reconnects on disconnect)
-- Two-column responsive grid — collapses to single column on narrow screens
-- Print progress, temperatures, fans, AMS filaments with color swatches, errors, WiFi signal
-- Dark monospace theme matching the terminal aesthetic
+- Live updates over Socket.IO; reconnects on its own and warns when the printer has gone quiet
+- Progress ring with layer count, time left, wall-clock finish time, and elapsed time
+- Current print stage (bed leveling, heating, filament change, and so on) shown under the file name
+- Heat bars for nozzle, bed, and chamber with the target marked and an animated stripe while heating
+- Temperature history chart for the last 30 minutes (kept on the server, so a fresh tab gets the history too)
+- AMS slot tiles with color swatch, filament type, color name, remaining percentage, and the slot currently in use; external spool shown when loaded
+- Fan dials for part cooling, hotend, auxiliary, and chamber
+- Printer controls: pause, resume, stop (with confirmation), speed profile (Silent/Standard/Sport/Ludicrous), and chamber light
+- Browser notifications when a print finishes, fails, or pauses (click the bell to enable)
+- Tab title shows the progress percentage while printing
+- Event log with a link to the Bambu wiki entry for each HMS code
+- Works on a phone, a tablet by the printer, or a desktop
+
+### Controls
+
+Controls are on by default. To run the dashboard display-only, set `BAMBU_CONTROLS=0` in your environment or `.env`.
+
+### JSON API
+
+The dashboard also exposes its state for other tools (Home Assistant, scripts, a status screen):
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/state` | Current printer snapshot as JSON |
+| `GET /api/history` | Temperature samples for the last 30 minutes |
+| `POST /api/command` | Send a command: `{"action": "pause"}`, `resume`, `stop`, `{"action": "speed", "value": 2}`, `{"action": "light", "value": true}` |
 
 ## How It Works
 

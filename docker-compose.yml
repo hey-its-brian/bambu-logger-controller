@@ -7,4 +7,5 @@ services:
       - BAMBU_IP=${BAMBU_IP}
       - BAMBU_SERIAL=${BAMBU_SERIAL}
       - BAMBU_ACCESS_CODE=${BAMBU_ACCESS_CODE}
+      - BAMBU_CONTROLS=${BAMBU_CONTROLS:-1}
     restart: unless-stopped
