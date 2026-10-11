@@ -3,242 +3,516 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bambu P1S Monitor</title>
+    <meta name="theme-color" content="#1b2230">
+    <title>Bambu P1S</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%233ddc97' stroke-width='5'/%3E%3C/svg%3E">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
-    <header>
-        <h1>Bambu P1S Monitor</h1>
-        <span id="wifi" class="wifi"></span>
+<body data-controls="{{ 'on' if controls_enabled else 'off' }}">
+
+    <header class="topbar">
+        <div class="identity">
+            <span id="conn-dot" class="conn-dot" title="Printer connection"></span>
+            <h1>P1S</h1>
+            <span id="state-pill" class="state-pill">Waiting for printer</span>
+        </div>
+        <div class="topbar-right">
+            <span id="wifi" class="meta-chip" title="Printer WiFi signal">WiFi --</span>
+            <button id="light-btn" class="icon-btn" type="button" title="Toggle chamber light" aria-pressed="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21h6M12 3a7 7 0 0 0-4 12.7V18h8v-2.3A7 7 0 0 0 12 3z"/></svg>
+                <span class="sr-only">Chamber light</span>
+            </button>
+            <button id="notify-btn" class="icon-btn" type="button" title="Notify me when the print finishes">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4l2-2zM10 20a2 2 0 0 0 4 0"/></svg>
+                <span class="sr-only">Notifications</span>
+            </button>
+        </div>
     </header>
 
-    <div id="disconnected" class="banner hidden">Reconnecting to server&hellip;</div>
+    <div id="disconnected" class="banner hidden">Lost connection to the dashboard server. Reconnecting&hellip;</div>
+    <div id="stale" class="banner banner-warn hidden">No report from the printer for <span id="stale-age">--</span>s</div>
 
     <main>
-        <section class="card" id="print-info">
-            <h2>Print Status</h2>
-            <div class="field">
-                <span class="label">State:</span>
-                <span id="state" class="value">--</span>
-            </div>
-            <div class="field" id="file-row">
-                <span class="label">File:</span>
-                <span id="filename" class="value">--</span>
-            </div>
-            <div id="progress-row">
-                <div class="field">
-                    <span class="label">Progress:</span>
-                    <span id="progress-text" class="value">--%</span>
-                </div>
-                <div class="progress-bar">
-                    <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+      <div class="col col-main">
+        <!-- Hero: progress -->
+        <section class="hero" id="hero">
+            <div class="ring-wrap">
+                <svg class="ring" viewBox="0 0 120 120" aria-hidden="true">
+                    <circle class="ring-track" cx="60" cy="60" r="52"/>
+                    <circle id="ring-fill" class="ring-fill" cx="60" cy="60" r="52"
+                            stroke-dasharray="326.73" stroke-dashoffset="326.73"/>
+                </svg>
+                <div class="ring-center">
+                    <span id="progress-text" class="ring-pct">--</span>
+                    <span id="ring-sub" class="ring-sub">idle</span>
                 </div>
             </div>
-            <div class="field" id="layer-row">
-                <span class="label">Layer:</span>
-                <span id="layer" class="value">--</span>
-            </div>
-            <div class="field" id="eta-row">
-                <span class="label">ETA:</span>
-                <span id="eta" class="value">--:--</span>
+
+            <div class="hero-body">
+                <div class="job">
+                    <span id="filename" class="job-name">No job loaded</span>
+                    <span id="stage" class="job-stage"></span>
+                </div>
+
+                <dl class="facts">
+                    <div><dt>Layer</dt><dd id="layer">--</dd></div>
+                    <div><dt>Time left</dt><dd id="eta">--:--</dd></div>
+                    <div><dt>Done at</dt><dd id="finish-at">--:--</dd></div>
+                    <div><dt>Elapsed</dt><dd id="elapsed">--:--</dd></div>
+                </dl>
+
+                <div class="controls" id="controls">
+                    <button id="pause-btn" class="btn" type="button" data-action="pause">Pause</button>
+                    <button id="resume-btn" class="btn btn-primary hidden" type="button" data-action="resume">Resume</button>
+                    <button id="stop-btn" class="btn btn-danger" type="button" data-action="stop">Stop</button>
+                    <label class="speed">
+                        <span>Speed</span>
+                        <select id="speed-select" aria-label="Print speed profile">
+                            <option value="1">Silent</option>
+                            <option value="2">Standard</option>
+                            <option value="3">Sport</option>
+                            <option value="4">Ludicrous</option>
+                        </select>
+                    </label>
+                </div>
             </div>
         </section>
 
-        <section class="card" id="temps-fans">
-            <div id="temps">
-                <h2>Temperatures</h2>
-                <div class="field">
-                    <span class="label">Nozzle:</span>
-                    <span id="nozzle" class="value">--</span>
+        <!-- AMS -->
+        <section class="panel" id="ams-card">
+            <div class="panel-head">
+                <h2>Filament</h2>
+                <span id="ams-env" class="panel-note"></span>
+            </div>
+            <div id="ams-list" class="slots">
+                <p class="empty">No AMS detected.</p>
+            </div>
+        </section>
+
+        <!-- Errors -->
+        <section class="panel" id="errors-card">
+            <div class="panel-head">
+                <h2>Events</h2>
+                <span class="panel-note">this session</span>
+            </div>
+            <div id="error-list" class="events">
+                <p class="empty">Nothing to report. Errors from the printer will show up here.</p>
+            </div>
+        </section>
+      </div>
+
+      <div class="col col-side">
+        <!-- Temperatures -->
+        <section class="panel" id="temps">
+            <div class="panel-head">
+                <h2>Heat</h2>
+                <span class="panel-note">actual / target</span>
+            </div>
+            <div class="thermo" data-zone="nozzle">
+                <div class="thermo-row">
+                    <span class="thermo-name">Nozzle</span>
+                    <span class="thermo-read"><b id="nozzle-actual">--</b><i id="nozzle-target">/ --</i>°C</span>
                 </div>
-                <div class="field">
-                    <span class="label">Bed:</span>
-                    <span id="bed" class="value">--</span>
+                <div class="thermo-bar"><div id="nozzle-fill" class="thermo-fill"></div><div id="nozzle-tick" class="thermo-tick"></div></div>
+            </div>
+            <div class="thermo" data-zone="bed">
+                <div class="thermo-row">
+                    <span class="thermo-name">Bed</span>
+                    <span class="thermo-read"><b id="bed-actual">--</b><i id="bed-target">/ --</i>°C</span>
                 </div>
-                <div class="field">
-                    <span class="label">Chamber:</span>
-                    <span id="chamber" class="value">--</span>
+                <div class="thermo-bar"><div id="bed-fill" class="thermo-fill"></div><div id="bed-tick" class="thermo-tick"></div></div>
+            </div>
+            <div class="thermo" data-zone="chamber">
+                <div class="thermo-row">
+                    <span class="thermo-name">Chamber</span>
+                    <span class="thermo-read"><b id="chamber-actual">--</b>°C</span>
+                </div>
+                <div class="thermo-bar"><div id="chamber-fill" class="thermo-fill"></div></div>
+            </div>
+
+            <div class="chart-wrap">
+                <canvas id="temp-chart" height="110" aria-label="Temperature history, last 30 minutes" role="img"></canvas>
+                <div class="chart-legend">
+                    <span class="lg lg-nozzle">Nozzle</span>
+                    <span class="lg lg-bed">Bed</span>
+                    <span class="lg lg-chamber">Chamber</span>
+                    <span class="lg-note">last 30 min</span>
                 </div>
             </div>
-            <div id="fans">
+        </section>
+
+        <!-- Fans -->
+        <section class="panel" id="fans">
+            <div class="panel-head">
                 <h2>Fans</h2>
-                <div id="fan-list"></div>
+                <span id="speed-chip" class="panel-note"></span>
+            </div>
+            <div id="fan-list" class="fan-grid">
+                <p class="empty">No fan data yet.</p>
             </div>
         </section>
 
-        <section class="card" id="errors-card">
-            <h2>Errors</h2>
-            <div id="error-list">
-                <span class="dim">No errors</span>
-            </div>
-        </section>
-
-        <section class="card" id="ams-card">
-            <h2>AMS Filaments</h2>
-            <div id="ams-list">
-                <span class="dim">No AMS data</span>
-            </div>
-        </section>
+      </div>
     </main>
 
     <footer>
-        <span id="last-update">Last update: --:--:--</span>
+        <span id="last-update">Waiting for first report</span>
+        <a href="/api/state" class="foot-link">JSON</a>
     </footer>
+
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
+    (function () {
+        const $ = (id) => document.getElementById(id);
+        const RING_LEN = 326.73;
+        const controlsOn = document.body.dataset.controls === "on";
+
         const socket = io();
+        let history = [];
+        let lastState = null;
+        let lightOn = null;
+        let staleTimer = null;
 
-        socket.on("connect", () => {
-            document.getElementById("disconnected").classList.add("hidden");
+        // ---------- socket ----------
+        socket.on("connect", () => $("disconnected").classList.add("hidden"));
+        socket.on("disconnect", () => $("disconnected").classList.remove("hidden"));
+        socket.on("temp_history", (rows) => { history = rows || []; drawChart(); });
+        socket.on("printer_state", (d) => { render(d); });
+        socket.on("command_result", (r) => toast(r.message, r.ok ? "ok" : "err"));
+
+        // ---------- controls ----------
+        if (!controlsOn) {
+            $("controls").classList.add("hidden");
+            $("light-btn").classList.add("hidden");
+        }
+
+        function send(action, value) {
+            socket.emit("command", { action, value });
+        }
+
+        document.querySelectorAll("#controls [data-action]").forEach((btn) => {
+            btn.addEventListener("click", () => {
+                const action = btn.dataset.action;
+                if (action === "stop" && !confirm("Stop the current print? This cannot be undone.")) return;
+                send(action);
+            });
         });
 
-        socket.on("disconnect", () => {
-            document.getElementById("disconnected").classList.remove("hidden");
+        $("speed-select").addEventListener("change", (e) => send("speed", e.target.value));
+
+        $("light-btn").addEventListener("click", () => {
+            const next = !(lightOn === true);
+            send("light", next);
+            lightOn = next;            // optimistic; printer report will confirm
+            setLightButton();
         });
 
-        socket.on("printer_state", (data) => {
-            updateDashboard(data);
+        function setLightButton() {
+            const b = $("light-btn");
+            b.classList.toggle("is-on", lightOn === true);
+            b.setAttribute("aria-pressed", lightOn === true ? "true" : "false");
+        }
+
+        // ---------- notifications ----------
+        $("notify-btn").addEventListener("click", async () => {
+            if (!("Notification" in window)) return toast("This browser does not support notifications", "err");
+            const perm = await Notification.requestPermission();
+            if (perm === "granted") {
+                localStorage.setItem("bambu-notify", "1");
+                toast("You'll get a notification when the print finishes or fails", "ok");
+            } else {
+                toast("Notifications are blocked for this site", "err");
+            }
+            setNotifyButton();
         });
+        function notifyEnabled() {
+            try { return localStorage.getItem("bambu-notify") === "1" && Notification.permission === "granted"; }
+            catch (e) { return false; }
+        }
+        function setNotifyButton() { $("notify-btn").classList.toggle("is-on", notifyEnabled()); }
+        setNotifyButton();
 
-        function updateDashboard(d) {
-            // State
-            const stateEl = document.getElementById("state");
-            stateEl.textContent = d.state_label || "--";
-            stateEl.className = "value state-" + (d.state || "").toLowerCase();
+        function maybeNotify(d) {
+            if (!lastState || !notifyEnabled()) return;
+            if (lastState === d.state) return;
+            if (d.state === "FINISH") new Notification("Print finished", { body: d.filename || "" });
+            if (d.state === "FAILED") new Notification("Print failed", { body: d.filename || "" });
+            if (d.state === "PAUSE" && lastState === "RUNNING") new Notification("Print paused", { body: d.stage || d.filename || "" });
+        }
 
-            // WiFi
-            const wifiEl = document.getElementById("wifi");
+        // ---------- render ----------
+        function render(d) {
+            const active = ["RUNNING", "PAUSE", "PREPARE", "SLICING"].includes(d.state);
+            const hero = $("hero");
+            hero.dataset.state = (d.state || "").toLowerCase();
+
+            // connection + staleness
+            $("conn-dot").classList.toggle("online", !!d.printer_online);
+            $("conn-dot").title = d.printer_online ? "Printer connected" : "Printer not responding";
+            if (d.report_age != null && d.report_age > 30) {
+                $("stale-age").textContent = d.report_age;
+                $("stale").classList.remove("hidden");
+            } else {
+                $("stale").classList.add("hidden");
+            }
+
+            // state pill
+            const pill = $("state-pill");
+            pill.textContent = d.printer_online ? (d.state_label || "Unknown") : "Printer offline";
+            pill.className = "state-pill state-" + (d.state || "").toLowerCase();
+
+            // wifi
             if (d.wifi_signal != null) {
-                const val = String(d.wifi_signal).replace("dBm", "");
-                wifiEl.textContent = "WiFi: " + val + "dBm";
+                const dbm = parseInt(String(d.wifi_signal).replace("dBm", ""), 10);
+                $("wifi").textContent = "WiFi " + dbm + " dBm";
+                $("wifi").dataset.quality = dbm > -55 ? "good" : dbm > -70 ? "ok" : "poor";
             }
 
-            // File
-            const fileRow = document.getElementById("file-row");
-            const filenameEl = document.getElementById("filename");
-            if (d.filename && d.state !== "IDLE") {
-                filenameEl.textContent = d.filename;
-                fileRow.classList.remove("hidden");
-            } else {
-                fileRow.classList.add("hidden");
+            // light
+            if (d.light_on != null) { lightOn = d.light_on; setLightButton(); }
+
+            // ring
+            const pct = (active || d.state === "FINISH") && d.progress != null ? Math.max(0, Math.min(100, d.progress)) : null;
+            $("ring-fill").style.strokeDashoffset = pct == null ? RING_LEN : RING_LEN * (1 - pct / 100);
+            $("progress-text").textContent = pct == null ? "--" : pct + "%";
+            $("ring-sub").textContent = pct == null ? (d.state_label || "").toLowerCase() : (d.state === "PAUSE" ? "paused" : d.state === "FINISH" ? "done" : "printing");
+            document.title = (pct != null && active ? pct + "% · " : "") + "Bambu P1S";
+
+            // job
+            $("filename").textContent = d.filename && d.state !== "IDLE" ? d.filename : "No job loaded";
+            $("stage").textContent = d.stage && d.stage !== "Printing" ? d.stage : "";
+
+            // facts
+            $("layer").textContent = active && d.layer != null && d.total_layers ? d.layer + " / " + d.total_layers : "--";
+            $("eta").textContent = active && d.eta && d.eta !== "--:--" ? d.eta : "--:--";
+            $("finish-at").textContent = d.finish_at || "--:--";
+            $("elapsed").textContent = d.elapsed || "--:--";
+
+            // controls visibility
+            if (controlsOn) {
+                const paused = d.state === "PAUSE";
+                $("pause-btn").classList.toggle("hidden", paused || !active);
+                $("resume-btn").classList.toggle("hidden", !paused);
+                $("stop-btn").disabled = !active;
+                $("pause-btn").disabled = !active;
+                if (d.speed_level && document.activeElement !== $("speed-select")) $("speed-select").value = String(d.speed_level);
+                $("speed-select").disabled = !d.printer_online;
             }
+            $("speed-chip").textContent = d.speed_label ? d.speed_label + (d.speed_pct ? " · " + d.speed_pct + "%" : "") : "";
 
-            // Progress
-            const progressRow = document.getElementById("progress-row");
-            if (d.progress != null && d.state !== "IDLE") {
-                document.getElementById("progress-text").textContent = d.progress + "%";
-                document.getElementById("progress-fill").style.width = d.progress + "%";
-                progressRow.classList.remove("hidden");
-            } else {
-                progressRow.classList.add("hidden");
-            }
+            // temps
+            setThermo("nozzle", d.temps.nozzle, 300);
+            setThermo("bed", d.temps.bed, 110);
+            setThermo("chamber", d.temps.chamber, 60);
 
-            // Layer
-            const layerRow = document.getElementById("layer-row");
-            if (d.layer != null && d.total_layers && d.state !== "IDLE") {
-                document.getElementById("layer").textContent = d.layer + "/" + d.total_layers;
-                layerRow.classList.remove("hidden");
-            } else {
-                layerRow.classList.add("hidden");
-            }
-
-            // ETA
-            const etaRow = document.getElementById("eta-row");
-            if (d.eta && d.eta !== "--:--" && d.state !== "IDLE") {
-                document.getElementById("eta").textContent = d.eta;
-                etaRow.classList.remove("hidden");
-            } else {
-                etaRow.classList.add("hidden");
-            }
-
-            // Temperatures
-            document.getElementById("nozzle").textContent = d.nozzle || "--";
-            document.getElementById("bed").textContent = d.bed || "--";
-            document.getElementById("chamber").textContent =
-                d.chamber_temp != null ? d.chamber_temp + "\u00B0C" : "--";
-
-            // Fans
-            const fanList = document.getElementById("fan-list");
-            if (d.fans && Object.keys(d.fans).length > 0) {
-                fanList.innerHTML = "";
-                for (const [name, pct] of Object.entries(d.fans)) {
-                    const div = document.createElement("div");
-                    div.className = "field";
-                    div.innerHTML =
-                        '<span class="label">' + esc(name) + ':</span>' +
-                        '<span class="value">' + esc(pct) + '</span>';
-                    fanList.appendChild(div);
+            // history (append client-side between server snapshots of history)
+            const t = d.temps;
+            if (t.nozzle.actual != null || t.bed.actual != null) {
+                const last = history[history.length - 1];
+                const now = Math.round(Date.now() / 1000);
+                if (!last || now - last.t >= 2) {
+                    history.push({ t: now, nozzle: t.nozzle.actual, bed: t.bed.actual, chamber: t.chamber.actual });
+                    const cutoff = now - 30 * 60;
+                    while (history.length && history[0].t < cutoff) history.shift();
                 }
-            } else {
-                fanList.innerHTML = '<span class="dim">No fan data</span>';
             }
+            drawChart();
 
-            // Errors
-            const errorList = document.getElementById("error-list");
-            if (d.errors && d.errors.length > 0) {
-                errorList.innerHTML = "";
-                for (const err of d.errors) {
-                    const div = document.createElement("div");
-                    div.className = "error-entry severity-" + (err.severity >= 3 ? "high" : "low");
-                    div.innerHTML =
-                        '<span class="error-time">[' + esc(err.time) + ']</span> ' +
-                        '<span class="error-desc">' + esc(err.description) + '</span>';
-                    errorList.appendChild(div);
-                }
-            } else {
-                errorList.innerHTML = '<span class="dim">No errors</span>';
-            }
+            // fans
+            renderFans(d.fans || []);
 
             // AMS
-            const amsList = document.getElementById("ams-list");
-            if (d.ams && d.ams.length > 0) {
-                amsList.innerHTML = "";
-                for (const unit of d.ams) {
-                    if (unit.humidity != null || unit.temp != null) {
-                        const meta = document.createElement("div");
-                        meta.className = "ams-meta dim";
-                        const parts = [];
-                        if (unit.humidity != null) parts.push("H:" + unit.humidity + "%");
-                        if (unit.temp != null) parts.push("T:" + unit.temp + "\u00B0C");
-                        meta.textContent = parts.join(" ");
-                        amsList.appendChild(meta);
-                    }
-                    for (const tray of unit.trays) {
-                        const div = document.createElement("div");
-                        div.className = "ams-tray";
-                        if (!tray.type) {
-                            div.innerHTML =
-                                '<span class="ams-slot">Slot ' + tray.slot + ':</span> ' +
-                                '<span class="dim">(empty)</span>';
-                        } else {
-                            let swatch = "";
-                            if (tray.color) {
-                                swatch = '<span class="color-swatch" style="background:#' +
-                                    esc(tray.color) + '"></span> ';
-                            }
-                            const name = tray.color_name ? " (" + esc(tray.color_name) + ")" : "";
-                            div.innerHTML =
-                                '<span class="ams-slot">Slot ' + tray.slot + ':</span> ' +
-                                swatch + esc(tray.type) + name;
-                        }
-                        amsList.appendChild(div);
-                    }
-                }
-            } else {
-                amsList.innerHTML = '<span class="dim">No AMS data</span>';
-            }
+            renderAms(d);
 
-            // Last update
-            document.getElementById("last-update").textContent =
-                "Last update: " + (d.last_update || "--:--:--");
+            // errors
+            renderErrors(d.errors || []);
+
+            $("last-update").textContent = "Updated " + (d.last_update || "--:--:--");
+
+            maybeNotify(d);
+            lastState = d.state;
+        }
+
+        function setThermo(zone, t, scaleMax) {
+            const a = t.actual, g = t.target;
+            $(zone + "-actual").textContent = a != null ? (zone === "chamber" ? Math.round(a) : a.toFixed(1)) : "--";
+            const tg = $(zone + "-target");
+            if (tg) tg.textContent = g != null && g > 0 ? " / " + Math.round(g) : " / --";
+            const fill = $(zone + "-fill");
+            fill.style.width = a != null ? Math.min(100, (a / scaleMax) * 100) + "%" : "0%";
+            const heating = g != null && g > 0 && a != null && a < g - 2;
+            fill.classList.toggle("heating", heating);
+            const tick = $(zone + "-tick");
+            if (tick) {
+                if (g != null && g > 0) { tick.style.left = Math.min(100, (g / scaleMax) * 100) + "%"; tick.classList.remove("hidden"); }
+                else tick.classList.add("hidden");
+            }
+        }
+
+        function renderFans(fans) {
+            const list = $("fan-list");
+            if (!fans.length) { list.innerHTML = '<p class="empty">No fan data yet.</p>'; return; }
+            list.innerHTML = "";
+            for (const f of fans) {
+                const el = document.createElement("div");
+                el.className = "fan";
+                el.innerHTML =
+                    '<svg viewBox="0 0 36 36" class="fan-dial" aria-hidden="true">' +
+                    '<circle class="dial-track" cx="18" cy="18" r="15"/>' +
+                    '<circle class="dial-fill" cx="18" cy="18" r="15" stroke-dasharray="94.25" stroke-dashoffset="' + (94.25 * (1 - f.pct / 100)).toFixed(2) + '"/></svg>' +
+                    '<div class="fan-text"><b>' + f.pct + '%</b><span>' + esc(f.name) + '</span></div>';
+                if (f.pct > 0) el.classList.add("spinning");
+                list.appendChild(el);
+            }
+        }
+
+        function renderAms(d) {
+            const list = $("ams-list");
+            const env = $("ams-env");
+            const units = d.ams || [];
+            const hasAms = units.length > 0;
+            const ext = d.external_spool;
+            if (!hasAms && !ext) {
+                list.innerHTML = '<p class="empty">No AMS detected.</p>';
+                env.textContent = "";
+                return;
+            }
+            list.innerHTML = "";
+            const envParts = [];
+            units.forEach((u, i) => {
+                if (u.humidity != null) envParts.push((units.length > 1 ? "AMS " + (i + 1) + " " : "") + "humidity " + humidityWord(u.humidity));
+                if (u.temp != null) envParts.push(Math.round(u.temp) + "°C");
+                for (const tr of u.trays) list.appendChild(slotEl(tr, units.length > 1 ? "AMS " + (i + 1) + " · " : ""));
+            });
+            if (ext) list.appendChild(slotEl(ext, ""));
+            env.textContent = envParts.join(" · ");
+        }
+
+        function humidityWord(h) {
+            // AMS reports a 1..5 level where 1 is driest, or sometimes a percentage.
+            const n = Number(h);
+            if (n <= 5) return ["very dry", "dry", "normal", "humid", "very humid"][n - 1] || String(h);
+            return n + "%";
+        }
+
+        function slotEl(tr, prefix) {
+            const el = document.createElement("div");
+            el.className = "slot" + (tr.active ? " active" : "") + (!tr.type ? " empty-slot" : "");
+            const color = tr.color ? "#" + esc(tr.color) : "";
+            const remain = tr.remain != null ? tr.remain : (tr.type ? 100 : 0);
+            const label = tr.slot === "Ext" ? "External" : "Slot " + tr.slot;
+            el.innerHTML =
+                '<div class="spool" style="--c:' + (color || "transparent") + ';--r:' + remain + '%">' +
+                    '<div class="spool-fill"></div></div>' +
+                '<div class="slot-text">' +
+                    '<span class="slot-id">' + esc(prefix + label) + (tr.active ? ' <em>in use</em>' : '') + '</span>' +
+                    (tr.type
+                        ? '<b>' + esc(tr.type) + '</b><span>' + esc(tr.color_name || "") + (tr.remain != null ? ' · ' + tr.remain + '% left' : '') + '</span>'
+                        : '<b class="muted">Empty</b>') +
+                '</div>';
+            if (tr.type && tr.nozzle_min && tr.nozzle_max) el.title = tr.type + " " + tr.nozzle_min + "-" + tr.nozzle_max + "°C";
+            return el;
+        }
+
+        function renderErrors(errors) {
+            const list = $("error-list");
+            if (!errors.length) {
+                list.innerHTML = '<p class="empty">Nothing to report. Errors from the printer will show up here.</p>';
+                return;
+            }
+            list.innerHTML = "";
+            for (const e of errors.slice().reverse()) {
+                const el = document.createElement("div");
+                el.className = "event " + (e.severity >= 3 ? "sev-high" : "sev-low");
+                el.innerHTML =
+                    '<time>' + esc(e.time) + '</time>' +
+                    '<span class="event-desc">' + esc(e.description) + '</span>' +
+                    (e.url ? '<a href="' + esc(e.url) + '" target="_blank" rel="noopener">' + esc(e.code) + '</a>' : '');
+                list.appendChild(el);
+            }
+        }
+
+        // ---------- chart ----------
+        function drawChart() {
+            const canvas = $("temp-chart");
+            const wrap = canvas.parentElement;
+            const dpr = window.devicePixelRatio || 1;
+            const W = wrap.clientWidth, H = 110;
+            if (!W) return;
+            canvas.width = W * dpr; canvas.height = H * dpr;
+            canvas.style.width = W + "px"; canvas.style.height = H + "px";
+            const ctx = canvas.getContext("2d");
+            ctx.scale(dpr, dpr);
+            ctx.clearRect(0, 0, W, H);
+
+            const css = getComputedStyle(document.documentElement);
+            const colors = {
+                nozzle: css.getPropertyValue("--nozzle").trim(),
+                bed: css.getPropertyValue("--bed").trim(),
+                chamber: css.getPropertyValue("--chamber").trim(),
+            };
+            const grid = css.getPropertyValue("--line").trim();
+            const pad = { l: 30, r: 6, t: 8, b: 6 };
+
+            if (history.length < 2) {
+                ctx.fillStyle = css.getPropertyValue("--muted").trim();
+                ctx.font = "12px Space Grotesk, system-ui, sans-serif";
+                ctx.fillText("Collecting temperature history", pad.l, H / 2);
+                return;
+            }
+            const t0 = history[0].t, t1 = history[history.length - 1].t;
+            const span = Math.max(60, t1 - t0);
+            let maxV = 60;
+            for (const r of history) maxV = Math.max(maxV, r.nozzle || 0, r.bed || 0, r.chamber || 0);
+            maxV = Math.ceil(maxV / 50) * 50;
+
+            // gridlines
+            ctx.strokeStyle = grid; ctx.lineWidth = 1;
+            ctx.fillStyle = css.getPropertyValue("--muted").trim();
+            ctx.font = "10px Space Grotesk, system-ui, sans-serif";
+            ctx.textAlign = "right";
+            for (let v = 0; v <= maxV; v += maxV / 2) {
+                const y = pad.t + (H - pad.t - pad.b) * (1 - v / maxV);
+                ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
+                ctx.fillText(v + "°", pad.l - 4, y + 3);
+            }
+            const x = (t) => pad.l + ((t - t0) / span) * (W - pad.l - pad.r);
+            const y = (v) => pad.t + (H - pad.t - pad.b) * (1 - v / maxV);
+            for (const key of ["chamber", "bed", "nozzle"]) {
+                ctx.strokeStyle = colors[key]; ctx.lineWidth = key === "nozzle" ? 2 : 1.5;
+                ctx.beginPath();
+                let started = false;
+                for (const r of history) {
+                    if (r[key] == null) { started = false; continue; }
+                    if (!started) { ctx.moveTo(x(r.t), y(r[key])); started = true; }
+                    else ctx.lineTo(x(r.t), y(r[key]));
+                }
+                ctx.stroke();
+            }
+        }
+        window.addEventListener("resize", drawChart);
+
+        // ---------- misc ----------
+        let toastTimer = null;
+        function toast(msg, kind) {
+            const el = $("toast");
+            el.textContent = msg;
+            el.className = "toast " + (kind || "");
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => el.classList.add("hidden"), 3500);
         }
 
         function esc(s) {
             const el = document.createElement("span");
-            el.textContent = s;
+            el.textContent = s == null ? "" : String(s);
             return el.innerHTML;
         }
+    })();
     </script>
 </body>
 </html>
