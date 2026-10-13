@@ -155,6 +155,14 @@ def format_temp(actual, target):
     return f"{a}/{t}°C"
 
 
+def _light_state(p):
+    """Return True/False for the chamber light, or None if unknown."""
+    for entry in p.get("lights_report", []) or []:
+        if isinstance(entry, dict) and entry.get("node") == "chamber_light":
+            return entry.get("mode") == "on"
+    return None
+
+
 def format_time(minutes):
     if not minutes or minutes < 0:
         return "--:--"
@@ -283,6 +291,13 @@ def _build_snapshot():
         "nozzle": format_temp(p.get("nozzle_temper"), p.get("nozzle_target_temper")),
         "bed": format_temp(p.get("bed_temper"), p.get("bed_target_temper")),
         "chamber_temp": p.get("chamber_temper"),
+        # Raw numbers so the browser can draw actual/target gauges
+        "temps": {
+            "nozzle": {"actual": p.get("nozzle_temper"), "target": p.get("nozzle_target_temper")},
+            "bed": {"actual": p.get("bed_temper"), "target": p.get("bed_target_temper")},
+            "chamber": {"actual": p.get("chamber_temper"), "target": None},
+        },
+        "chamber_light": _light_state(p),
         "fans": fans,
         "wifi_signal": p.get("wifi_signal"),
         "ams": ams_data,

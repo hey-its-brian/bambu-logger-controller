@@ -3,240 +3,323 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bambu P1S Monitor</title>
+    <title>P1S // MONITOR</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
+<body data-state="idle">
     <header>
-        <h1>Bambu P1S Monitor</h1>
-        <span id="wifi" class="wifi"></span>
+        <div class="wordmark">
+            <span>P1S</span><span class="sep">//</span><span>MONITOR</span>
+            <span class="sub">DECK//OS</span>
+        </div>
+        <div class="hud">
+            <span class="readout" id="light-readout" title="Chamber light">LIGHT <b id="light">--</b></span>
+            <span class="readout" id="wifi-readout" title="Printer WiFi signal">WIFI <b id="wifi">--</b></span>
+            <span class="readout" title="Dashboard link to printer bridge"><span class="link-dot"></span><b id="link-text">LINK</b></span>
+        </div>
     </header>
 
-    <div id="disconnected" class="banner hidden">Reconnecting to server&hellip;</div>
+    <div id="disconnected" class="banner hidden">Connection to the dashboard server lost. Retrying.</div>
 
     <main>
-        <section class="card" id="print-info">
-            <h2>Print Status</h2>
-            <div class="field">
-                <span class="label">State:</span>
-                <span id="state" class="value">--</span>
-            </div>
-            <div class="field" id="file-row">
-                <span class="label">File:</span>
-                <span id="filename" class="value">--</span>
-            </div>
-            <div id="progress-row">
-                <div class="field">
-                    <span class="label">Progress:</span>
-                    <span id="progress-text" class="value">--%</span>
+        <section class="panel" id="job-panel">
+            <h2>Print job <span class="tag" id="job-tag"></span></h2>
+            <div class="job" id="job">
+                <div class="hero-number"><span id="progress-number">--</span><small>%</small></div>
+                <div class="job-meta">
+                    <span id="state" class="state-chip">Idle</span>
+                    <div class="filename" id="filename" title="">No job loaded</div>
+                    <div class="job-stats">
+                        <div class="stat" id="layer-stat">
+                            <span class="label">Layer</span>
+                            <span class="value" id="layer">--</span>
+                        </div>
+                        <div class="stat" id="eta-stat">
+                            <span class="label">Remaining</span>
+                            <span class="value" id="eta">--:--</span>
+                        </div>
+                    </div>
                 </div>
-                <div class="progress-bar">
-                    <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+                <div class="progress-track" id="progress-track">
+                    <div id="progress-fill" class="progress-fill"></div>
+                    <div class="progress-ticks"></div>
                 </div>
-            </div>
-            <div class="field" id="layer-row">
-                <span class="label">Layer:</span>
-                <span id="layer" class="value">--</span>
-            </div>
-            <div class="field" id="eta-row">
-                <span class="label">ETA:</span>
-                <span id="eta" class="value">--:--</span>
             </div>
         </section>
 
-        <section class="card" id="temps-fans">
-            <div id="temps">
-                <h2>Temperatures</h2>
-                <div class="field">
-                    <span class="label">Nozzle:</span>
-                    <span id="nozzle" class="value">--</span>
+        <section class="panel" id="temps-panel">
+            <h2>Thermals <span class="tag">actual / target</span></h2>
+            <div class="rows">
+                <div class="row">
+                    <span class="label">Nozzle</span>
+                    <div class="meter"><div class="meter-fill" id="nozzle-fill"></div><div class="meter-target" id="nozzle-target"></div></div>
+                    <span class="value" id="nozzle">--</span>
                 </div>
-                <div class="field">
-                    <span class="label">Bed:</span>
-                    <span id="bed" class="value">--</span>
+                <div class="row">
+                    <span class="label">Bed</span>
+                    <div class="meter"><div class="meter-fill" id="bed-fill"></div><div class="meter-target" id="bed-target"></div></div>
+                    <span class="value" id="bed">--</span>
                 </div>
-                <div class="field">
-                    <span class="label">Chamber:</span>
-                    <span id="chamber" class="value">--</span>
+                <div class="row">
+                    <span class="label">Chamber</span>
+                    <div class="meter"><div class="meter-fill" id="chamber-fill"></div></div>
+                    <span class="value" id="chamber">--</span>
                 </div>
-            </div>
-            <div id="fans">
-                <h2>Fans</h2>
-                <div id="fan-list"></div>
-            </div>
-        </section>
-
-        <section class="card" id="errors-card">
-            <h2>Errors</h2>
-            <div id="error-list">
-                <span class="dim">No errors</span>
             </div>
         </section>
 
-        <section class="card" id="ams-card">
-            <h2>AMS Filaments</h2>
+        <section class="panel" id="fans-panel">
+            <h2>Fans</h2>
+            <div class="rows" id="fan-list">
+                <span class="empty-state">No fan data yet</span>
+            </div>
+        </section>
+
+        <section class="panel" id="ams-panel">
+            <h2>AMS <span class="tag" id="ams-tag"></span></h2>
             <div id="ams-list">
-                <span class="dim">No AMS data</span>
+                <span class="empty-state">No AMS detected</span>
+            </div>
+        </section>
+
+        <section class="panel" id="events-panel">
+            <h2>Event log <span class="tag">this session</span></h2>
+            <div class="events" id="error-list">
+                <span class="empty-state ok">No errors or warnings</span>
             </div>
         </section>
     </main>
 
     <footer>
-        <span id="last-update">Last update: --:--:--</span>
+        <span>Bambu Lab P1S over LAN MQTT</span>
+        <span id="last-update">Last report <span class="blink">--:--:--</span></span>
     </footer>
 
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
         const socket = io();
+        const $ = (id) => document.getElementById(id);
+
+        // Fan and temperature meter ceilings (for bar lengths only)
+        const TEMP_MAX = { nozzle: 300, bed: 110, chamber: 60 };
 
         socket.on("connect", () => {
-            document.getElementById("disconnected").classList.add("hidden");
+            $("disconnected").classList.add("hidden");
+            document.body.classList.remove("offline");
+            $("link-text").textContent = "LINK";
         });
 
         socket.on("disconnect", () => {
-            document.getElementById("disconnected").classList.remove("hidden");
+            $("disconnected").classList.remove("hidden");
+            document.body.classList.add("offline");
+            $("link-text").textContent = "NO LINK";
         });
 
-        socket.on("printer_state", (data) => {
-            updateDashboard(data);
-        });
+        socket.on("printer_state", updateDashboard);
 
         function updateDashboard(d) {
-            // State
-            const stateEl = document.getElementById("state");
-            stateEl.textContent = d.state_label || "--";
-            stateEl.className = "value state-" + (d.state || "").toLowerCase();
+            const state = (d.state || "idle").toLowerCase();
+            const active = state !== "idle" && state !== "unknown";
+            document.body.dataset.state = state;
 
-            // WiFi
-            const wifiEl = document.getElementById("wifi");
+            // State chip
+            const stateEl = $("state");
+            stateEl.textContent = d.state_label || "Unknown";
+
+            // WiFi and light HUD
             if (d.wifi_signal != null) {
-                const val = String(d.wifi_signal).replace("dBm", "");
-                wifiEl.textContent = "WiFi: " + val + "dBm";
+                $("wifi").textContent = String(d.wifi_signal).replace("dBm", "") + " dBm";
             }
+            if (d.chamber_light === true) $("light").textContent = "ON";
+            else if (d.chamber_light === false) $("light").textContent = "OFF";
+            else $("light").textContent = "--";
 
-            // File
-            const fileRow = document.getElementById("file-row");
-            const filenameEl = document.getElementById("filename");
-            if (d.filename && d.state !== "IDLE") {
-                filenameEl.textContent = d.filename;
-                fileRow.classList.remove("hidden");
+            // Job hero
+            const fileEl = $("filename");
+            if (d.filename && active) {
+                fileEl.textContent = d.filename;
+                fileEl.title = d.filename;
             } else {
-                fileRow.classList.add("hidden");
+                fileEl.textContent = "No job loaded";
+                fileEl.title = "";
             }
 
-            // Progress
-            const progressRow = document.getElementById("progress-row");
-            if (d.progress != null && d.state !== "IDLE") {
-                document.getElementById("progress-text").textContent = d.progress + "%";
-                document.getElementById("progress-fill").style.width = d.progress + "%";
-                progressRow.classList.remove("hidden");
+            const pct = (d.progress != null && active) ? Number(d.progress) : null;
+            $("progress-number").textContent = pct != null ? pct : "--";
+            $("progress-number").parentElement.classList.toggle("na", pct == null);
+            $("job").classList.toggle("standby", pct == null);
+            $("progress-fill").style.width = (pct != null ? pct : 0) + "%";
+
+            if (d.layer != null && d.total_layers && active) {
+                $("layer").textContent = d.layer + " / " + d.total_layers;
+                $("layer-stat").classList.remove("hidden");
             } else {
-                progressRow.classList.add("hidden");
+                $("layer-stat").classList.add("hidden");
             }
 
-            // Layer
-            const layerRow = document.getElementById("layer-row");
-            if (d.layer != null && d.total_layers && d.state !== "IDLE") {
-                document.getElementById("layer").textContent = d.layer + "/" + d.total_layers;
-                layerRow.classList.remove("hidden");
+            if (d.eta && d.eta !== "--:--" && active) {
+                $("eta").textContent = d.eta;
+                $("eta-stat").classList.remove("hidden");
             } else {
-                layerRow.classList.add("hidden");
+                $("eta-stat").classList.add("hidden");
             }
 
-            // ETA
-            const etaRow = document.getElementById("eta-row");
-            if (d.eta && d.eta !== "--:--" && d.state !== "IDLE") {
-                document.getElementById("eta").textContent = d.eta;
-                etaRow.classList.remove("hidden");
-            } else {
-                etaRow.classList.add("hidden");
-            }
+            $("job-tag").textContent = active ? "" : "standing by";
 
-            // Temperatures
-            document.getElementById("nozzle").textContent = d.nozzle || "--";
-            document.getElementById("bed").textContent = d.bed || "--";
-            document.getElementById("chamber").textContent =
-                d.chamber_temp != null ? d.chamber_temp + "\u00B0C" : "--";
+            // Thermals
+            renderTemp("nozzle", d.temps && d.temps.nozzle, d.nozzle);
+            renderTemp("bed", d.temps && d.temps.bed, d.bed);
+            renderTemp("chamber", d.temps && d.temps.chamber,
+                d.chamber_temp != null ? d.chamber_temp + "°C" : "--");
 
             // Fans
-            const fanList = document.getElementById("fan-list");
-            if (d.fans && Object.keys(d.fans).length > 0) {
+            const fanList = $("fan-list");
+            const fans = d.fans ? Object.entries(d.fans) : [];
+            if (fans.length) {
                 fanList.innerHTML = "";
-                for (const [name, pct] of Object.entries(d.fans)) {
-                    const div = document.createElement("div");
-                    div.className = "field";
-                    div.innerHTML =
-                        '<span class="label">' + esc(name) + ':</span>' +
-                        '<span class="value">' + esc(pct) + '</span>';
-                    fanList.appendChild(div);
+                for (const [name, pctStr] of fans) {
+                    const n = parseInt(pctStr, 10);
+                    const row = document.createElement("div");
+                    row.className = "row";
+                    row.innerHTML =
+                        '<span class="label">' + esc(name) + '</span>' +
+                        '<div class="meter"><div class="meter-fill" style="width:' +
+                            (isNaN(n) ? 0 : clamp(n, 0, 100)) + '%"></div></div>' +
+                        '<span class="value">' + esc(pctStr) + '</span>';
+                    fanList.appendChild(row);
                 }
             } else {
-                fanList.innerHTML = '<span class="dim">No fan data</span>';
+                fanList.innerHTML = '<span class="empty-state">No fan data yet</span>';
             }
 
-            // Errors
-            const errorList = document.getElementById("error-list");
-            if (d.errors && d.errors.length > 0) {
+            // Events
+            const errorList = $("error-list");
+            if (d.errors && d.errors.length) {
                 errorList.innerHTML = "";
-                for (const err of d.errors) {
+                for (const err of d.errors.slice().reverse()) {
                     const div = document.createElement("div");
-                    div.className = "error-entry severity-" + (err.severity >= 3 ? "high" : "low");
+                    div.className = "event " + (err.severity >= 3 ? "sev-high" : "sev-low");
                     div.innerHTML =
-                        '<span class="error-time">[' + esc(err.time) + ']</span> ' +
-                        '<span class="error-desc">' + esc(err.description) + '</span>';
+                        '<span class="time">' + esc(err.time) + '</span>' +
+                        '<span class="code">' + esc(err.code || "") + '</span>' +
+                        '<span class="desc">' + esc(err.description) + '</span>';
                     errorList.appendChild(div);
                 }
             } else {
-                errorList.innerHTML = '<span class="dim">No errors</span>';
+                errorList.innerHTML = '<span class="empty-state ok">No errors or warnings</span>';
             }
 
             // AMS
-            const amsList = document.getElementById("ams-list");
-            if (d.ams && d.ams.length > 0) {
+            const amsList = $("ams-list");
+            if (d.ams && d.ams.length) {
                 amsList.innerHTML = "";
-                for (const unit of d.ams) {
+                let loaded = 0;
+                d.ams.forEach((unit, i) => {
+                    const wrap = document.createElement("div");
+                    wrap.className = "ams-unit";
+
                     if (unit.humidity != null || unit.temp != null) {
-                        const meta = document.createElement("div");
-                        meta.className = "ams-meta dim";
-                        const parts = [];
-                        if (unit.humidity != null) parts.push("H:" + unit.humidity + "%");
-                        if (unit.temp != null) parts.push("T:" + unit.temp + "\u00B0C");
-                        meta.textContent = parts.join(" ");
-                        amsList.appendChild(meta);
-                    }
-                    for (const tray of unit.trays) {
-                        const div = document.createElement("div");
-                        div.className = "ams-tray";
-                        if (!tray.type) {
-                            div.innerHTML =
-                                '<span class="ams-slot">Slot ' + tray.slot + ':</span> ' +
-                                '<span class="dim">(empty)</span>';
-                        } else {
-                            let swatch = "";
-                            if (tray.color) {
-                                swatch = '<span class="color-swatch" style="background:#' +
-                                    esc(tray.color) + '"></span> ';
-                            }
-                            const name = tray.color_name ? " (" + esc(tray.color_name) + ")" : "";
-                            div.innerHTML =
-                                '<span class="ams-slot">Slot ' + tray.slot + ':</span> ' +
-                                swatch + esc(tray.type) + name;
+                        const env = document.createElement("div");
+                        env.className = "ams-env";
+                        let html = "";
+                        if (d.ams.length > 1) html += "<span>Unit <b>" + (i + 1) + "</b></span>";
+                        if (unit.humidity != null) {
+                            // Bambu reports humidity as a 1 (dry) to 5 (wet) index
+                            const h = Number(unit.humidity);
+                            const wet = h >= 4;
+                            html += '<span class="' + (wet ? "wet" : "") + '">Humidity <b>' +
+                                esc(unit.humidity) + '</b></span>';
                         }
-                        amsList.appendChild(div);
+                        if (unit.temp != null) html += "<span>Temp <b>" + esc(unit.temp) + "°C</b></span>";
+                        env.innerHTML = html;
+                        wrap.appendChild(env);
                     }
-                }
+
+                    const slots = document.createElement("div");
+                    slots.className = "slots";
+                    for (const tray of unit.trays) {
+                        const slot = document.createElement("div");
+                        if (!tray.type) {
+                            slot.className = "slot empty";
+                            slot.innerHTML =
+                                '<span class="swatch none"></span>' +
+                                '<span class="slot-text"><span class="slot-id">SLOT ' + tray.slot +
+                                '</span><span class="slot-type">Empty</span></span>';
+                        } else {
+                            loaded++;
+                            const color = /^[0-9a-fA-F]{6}$/.test(tray.color || "") ? "#" + tray.color : null;
+                            slot.className = "slot";
+                            if (color) slot.style.borderLeftColor = color;
+                            const label = tray.color_name ? tray.type + " · " + tray.color_name : tray.type;
+                            slot.innerHTML =
+                                '<span class="swatch" style="background:' + (color || "transparent") + '"></span>' +
+                                '<span class="slot-text"><span class="slot-id">SLOT ' + tray.slot +
+                                '</span><span class="slot-type" title="' + esc(label) + '">' + esc(label) + '</span></span>';
+                        }
+                        slots.appendChild(slot);
+                    }
+                    wrap.appendChild(slots);
+                    amsList.appendChild(wrap);
+                });
+                $("ams-tag").textContent = loaded + " loaded";
             } else {
-                amsList.innerHTML = '<span class="dim">No AMS data</span>';
+                amsList.innerHTML = '<span class="empty-state">No AMS detected</span>';
+                $("ams-tag").textContent = "";
             }
 
-            // Last update
-            document.getElementById("last-update").textContent =
-                "Last update: " + (d.last_update || "--:--:--");
+            // Footer
+            $("last-update").innerHTML = 'Last report <span class="blink">' +
+                esc(d.last_update || "--:--:--") + '</span>';
+        }
+
+        function renderTemp(key, t, fallbackText) {
+            const valueEl = $(key);
+            const fill = $(key + "-fill");
+            const marker = $(key + "-target");
+            const max = TEMP_MAX[key];
+
+            const actual = t && typeof t.actual === "number" ? t.actual : null;
+            const target = t && typeof t.target === "number" && t.target > 0 ? t.target : null;
+
+            if (actual == null) {
+                valueEl.textContent = fallbackText || "--";
+                fill.style.width = "0%";
+                if (marker) marker.style.display = "none";
+                return;
+            }
+
+            const a = key === "chamber" ? Math.round(actual) : actual.toFixed(1);
+            valueEl.innerHTML = esc(String(a)) +
+                (target != null ? '<span class="target"> / ' + Math.round(target) + '</span>' : "") +
+                "°C";
+
+            fill.style.width = clamp(actual / max * 100, 0, 100) + "%";
+            fill.classList.remove("hot", "at-target");
+            if (target != null) {
+                if (Math.abs(actual - target) <= 2) fill.classList.add("at-target");
+                else if (actual > target + 2) fill.classList.add("hot");
+            }
+
+            if (marker) {
+                if (target != null) {
+                    marker.style.display = "";
+                    marker.style.left = clamp(target / max * 100, 0, 100) + "%";
+                } else {
+                    marker.style.display = "none";
+                }
+            }
+        }
+
+        function clamp(n, lo, hi) {
+            return Math.min(hi, Math.max(lo, n));
         }
 
         function esc(s) {
             const el = document.createElement("span");
-            el.textContent = s;
+            el.textContent = s == null ? "" : String(s);
             return el.innerHTML;
         }
     </script>
